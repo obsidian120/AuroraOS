@@ -30,3 +30,9 @@ Obsidian is not responsible for any damage, data loss, or other issues that may 
 ## Author
 
 Programmiert von Obsidian.
+
+
+
+![AuroraOS Boot](assets/boot.png)
+![AuroraOS Settings](assets/settings.png)
+![AuroraOS Lumen](assets/lumen.png)
