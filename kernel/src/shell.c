@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "cyralithfs.h"
 #include "console.h"
+#include "desktop.h"
 #include "string.h"
 #include "ai_core.h"
 #include "memory.h"
@@ -22,6 +23,10 @@
 #include "interrupts.h"
 #include "syslog.h"
 #include "panic.h"
+#include "cbdd.h"
+#include "x32fs_console.h"
+#include "ksettings.h"
+#include "ccs_settings.h"
 #include "io.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -59,25 +64,34 @@ typedef enum {
     SETTINGS_VIEW_GENERAL = 1,
     SETTINGS_VIEW_NETWORK = 2,
     SETTINGS_VIEW_SECURITY = 3,
-    SETTINGS_VIEW_EXPERT = 4
+    SETTINGS_VIEW_DISPLAY = 4,
+    SETTINGS_VIEW_KERNEL = 5,
+    SETTINGS_VIEW_CCS = 6,
+    SETTINGS_VIEW_FS = 7,
+    SETTINGS_VIEW_EXPERT = 8
 } settings_view_t;
 
 enum {
     SETTINGS_EDIT_NONE = 0,
     SETTINGS_EDIT_HOSTNAME = 1,
     SETTINGS_EDIT_IP = 2,
-    SETTINGS_EDIT_GATEWAY = 3
+    SETTINGS_EDIT_GATEWAY = 3,
+    SETTINGS_EDIT_SYSDO = 4
 };
 
 enum {
     SETTINGS_HOME_GENERAL = 0,
     SETTINGS_HOME_NETWORK = 1,
     SETTINGS_HOME_SECURITY = 2,
-    SETTINGS_HOME_EXPERT_MODE = 3,
-    SETTINGS_HOME_EXPERT_PAGE = 4,
-    SETTINGS_HOME_SAVE = 5,
-    SETTINGS_HOME_EXIT = 6,
-    SETTINGS_HOME_COUNT = 7
+    SETTINGS_HOME_DISPLAY = 3,
+    SETTINGS_HOME_KERNEL = 4,
+    SETTINGS_HOME_CCS = 5,
+    SETTINGS_HOME_FS = 6,
+    SETTINGS_HOME_EXPERT_MODE = 7,
+    SETTINGS_HOME_EXPERT_PAGE = 8,
+    SETTINGS_HOME_SAVE = 9,
+    SETTINGS_HOME_EXIT = 10,
+    SETTINGS_HOME_COUNT = 11
 };
 
 enum {
@@ -85,8 +99,10 @@ enum {
     SETTINGS_GENERAL_KEYBOARD = 1,
     SETTINGS_GENERAL_AI = 2,
     SETTINGS_GENERAL_HINTS = 3,
-    SETTINGS_GENERAL_BACK = 4,
-    SETTINGS_GENERAL_COUNT = 5
+    SETTINGS_GENERAL_AUTOSAVE = 4,
+    SETTINGS_GENERAL_VERBOSE_DIAG = 5,
+    SETTINGS_GENERAL_BACK = 6,
+    SETTINGS_GENERAL_COUNT = 7
 };
 
 enum {
@@ -100,6 +116,54 @@ enum {
 };
 
 enum {
+    SETTINGS_DISPLAY_ENABLE = 0,
+    SETTINGS_DISPLAY_BACKEND = 1,
+    SETTINGS_DISPLAY_MODE = 2,
+    SETTINGS_DISPLAY_CURSOR = 3,
+    SETTINGS_DISPLAY_CONTRAST = 4,
+    SETTINGS_DISPLAY_DEBUG = 5,
+    SETTINGS_DISPLAY_PROBE = 6,
+    SETTINGS_DISPLAY_RESET = 7,
+    SETTINGS_DISPLAY_BACK = 8,
+    SETTINGS_DISPLAY_COUNT = 9
+};
+
+enum {
+    SETTINGS_KERNEL_SAFE_DEFAULTS = 0,
+    SETTINGS_KERNEL_AUDIT = 1,
+    SETTINGS_KERNEL_RECOVERY = 2,
+    SETTINGS_KERNEL_UPDATE_GUARD = 3,
+    SETTINGS_KERNEL_SYSTEM_PATHS = 4,
+    SETTINGS_KERNEL_SYSDO_SINGLE = 5,
+    SETTINGS_KERNEL_BACK = 6,
+    SETTINGS_KERNEL_COUNT = 7
+};
+
+enum {
+    SETTINGS_CCS_PROFILE = 0,
+    SETTINGS_CCS_APP_ISOLATION = 1,
+    SETTINGS_CCS_MIN_NETWORK = 2,
+    SETTINGS_CCS_SIGNED_SOURCES = 3,
+    SETTINGS_CCS_ROLLBACK = 4,
+    SETTINGS_CCS_PACKAGE_PATH = 5,
+    SETTINGS_CCS_BACK = 6,
+    SETTINGS_CCS_COUNT = 7
+};
+
+enum {
+    SETTINGS_FS_PERSISTENCE = 0,
+    SETTINGS_FS_AUTOSAVE = 1,
+    SETTINGS_FS_STRICT_PERMS = 2,
+    SETTINGS_FS_SYSTEM_PATHS = 3,
+    SETTINGS_FS_X32_CONSOLE = 4,
+    SETTINGS_FS_RECOVERY_SCAN = 5,
+    SETTINGS_FS_SAVE_NOW = 6,
+    SETTINGS_FS_LOAD_NOW = 7,
+    SETTINGS_FS_BACK = 8,
+    SETTINGS_FS_COUNT = 9
+};
+
+enum {
     SETTINGS_SECURITY_APPROVAL = 0,
     SETTINGS_SECURITY_LEGACY = 1,
     SETTINGS_SECURITY_AUTOAPPROVE = 2,
@@ -110,10 +174,11 @@ enum {
 enum {
     SETTINGS_EXPERT_AUTONET = 0,
     SETTINGS_EXPERT_DRIVER_DEBUG = 1,
-    SETTINGS_EXPERT_AUTOSAVE = 2,
-    SETTINGS_EXPERT_VERBOSE_DIAG = 3,
-    SETTINGS_EXPERT_BACK = 4,
-    SETTINGS_EXPERT_COUNT = 5
+    SETTINGS_EXPERT_BOOT_SAFE = 2,
+    SETTINGS_EXPERT_PANIC_VERBOSE = 3,
+    SETTINGS_EXPERT_X32_CLI_STUB = 4,
+    SETTINGS_EXPERT_BACK = 5,
+    SETTINGS_EXPERT_COUNT = 6
 };
 
 static int g_settings_active = 0;
@@ -126,6 +191,8 @@ static char g_settings_notice[128];
 static char g_settings_edit_title[40];
 static unsigned int g_settings_anim_frame = 0U;
 static unsigned int g_settings_anim_idle = 0U;
+static int g_settings_sysdo_session = 0;
+static int g_kernelconfig_sysdo_gate = 0;
 
 static int g_setting_ai_smart = 1;
 static int g_setting_startup_hints = 1;
@@ -137,11 +204,15 @@ static int g_setting_driver_autostart = 0;
 static int g_setting_driver_debug = 0;
 static int g_setting_autosave = 0;
 static int g_setting_verbose_diag = 0;
+static int g_setting_boot_safe = 0;
+static int g_setting_panic_verbose = 0;
 
 static void run_command(const char* cmd);
 static void print_afs_result(int rc, const char* ok_de, const char* ok_en, const char* fail_de, const char* fail_en);
 static void settings_open(void);
+static void settings_close(int clear_screen);
 static void settings_handle_key(int key);
+static void command_sysdo(const char* args);
 static int save_system_state(void);
 static int load_system_state(void);
 static void print_jobs(void);
@@ -161,6 +232,7 @@ static void command_panic(const char* args);
 static void command_proc(const char* args);
 static void command_netdriver(const char* args);
 static void command_netdrivers(void);
+static void command_display(void);
 static void command_games(void);
 static void command_game(const char* args);
 static void show_help_all(void);
@@ -286,7 +358,7 @@ static const char* translate_id(const char* de, const char* en) {
     if (kstrcmp(de, "  Scheduler aktiv: ") == 0 && kstrcmp(en, "  Scheduler active: ") == 0) return "  Scheduler aktif: ";
     if (kstrcmp(de, "Schnellstart:") == 0 && kstrcmp(en, "Quick start:") == 0) return "Mulai cepat:";
     if (kstrcmp(de, "  1. help              - Zeigt alle wichtigen Befehle.") == 0 && kstrcmp(en, "  1. help              - Shows the main commands.") == 0) return "  1. help              - Menampilkan perintah utama.";
-    if (kstrcmp(de, "  2. settings          - Oeffnet die uebersichtlichen Einstellungen.") == 0 && kstrcmp(en, "  2. settings          - Opens the clear settings screen.") == 0) return "  2. settings          - Membuka pengaturan yang rapi.";
+    if (kstrcmp(de, "  2. kernelconfig      - Oeffnet die menuconfig-artige Kernelconfig.") == 0 && kstrcmp(en, "  2. kernelconfig      - Opens the menuconfig-like kernel configuration.") == 0) return "  2. kernelconfig      - Membuka konfigurasi kernel.";
     if (kstrcmp(de, "  3. whoami            - Zeigt, wer gerade angemeldet ist.") == 0 && kstrcmp(en, "  3. whoami            - Shows who is currently signed in.") == 0) return "  3. whoami            - Menampilkan siapa yang sedang masuk.";
     if (kstrcmp(de, "  4. cd ~              - Springt in deinen Home-Ordner.") == 0 && kstrcmp(en, "  4. cd ~              - Jumps to your home folder.") == 0) return "  4. cd ~              - Pindah ke folder home kamu.";
     if (kstrcmp(de, "  5. app list          - Zeigt installierte und optionale Apps.") == 0 && kstrcmp(en, "  5. app list          - Shows installed and optional apps.") == 0) return "  5. app list          - Menampilkan aplikasi terpasang dan opsional.";
@@ -303,14 +375,14 @@ static const char* translate_id(const char* de, const char* en) {
     if (kstrcmp(de, "Layout gesetzt: Deutsch (QWERTZ)") == 0 && kstrcmp(en, "Layout set: German (QWERTZ)") == 0) return "Layout diatur: Jerman (QWERTZ)";
     if (kstrcmp(de, "Layout gesetzt: US (QWERTY)") == 0 && kstrcmp(en, "Layout set: US (QWERTY)") == 0) return "Layout diatur: US (QWERTY)";
     if (kstrcmp(de, "Nutze: layout <de|us>") == 0 && kstrcmp(en, "Use: layout <de|us>") == 0) return "Gunakan: layout <de|us>";
-    if (kstrcmp(de, "Einstellungen") == 0 && kstrcmp(en, "Settings") == 0) return "Pengaturan";
+    if (kstrcmp(de, "Kernelconfig") == 0 && kstrcmp(en, "Kernelconfig") == 0) return "Pengaturan";
     if (kstrcmp(de, "Allgemein") == 0 && kstrcmp(en, "General") == 0) return "Umum";
     if (kstrcmp(de, "Netzwerk") == 0 && kstrcmp(en, "Network") == 0) return "Jaringan";
     if (kstrcmp(de, "Sicherheit") == 0 && kstrcmp(en, "Security") == 0) return "Keamanan";
     if (kstrcmp(de, "Expertenmodus") == 0 && kstrcmp(en, "Expert mode") == 0) return "Mode ahli";
     if (kstrcmp(de, "Treiber & System tief") == 0 && kstrcmp(en, "Drivers & low-level") == 0) return "Driver & tingkat rendah";
     if (kstrcmp(de, "Jetzt speichern") == 0 && kstrcmp(en, "Save now") == 0) return "Simpan sekarang";
-    if (kstrcmp(de, "Einstellungen schliessen") == 0 && kstrcmp(en, "Close settings") == 0) return "Tutup pengaturan";
+    if (kstrcmp(de, "Kernelconfig schliessen") == 0 && kstrcmp(en, "Close settings") == 0) return "Tutup pengaturan";
     if (kstrcmp(de, "Sprache") == 0 && kstrcmp(en, "Language") == 0) return "Bahasa";
     if (kstrcmp(de, "Tastatur-Layout") == 0 && kstrcmp(en, "Keyboard layout") == 0) return "Layout keyboard";
     if (kstrcmp(de, "KI-Hilfe") == 0 && kstrcmp(en, "AI help") == 0) return "Bantuan AI";
@@ -369,7 +441,7 @@ static const char* translate_id(const char* de, const char* en) {
     if (kstrcmp(de, "Expertenmodus aktiviert.") == 0 && kstrcmp(en, "Expert mode enabled.") == 0) return "Mode ahli diaktifkan.";
     if (kstrcmp(de, "Expertenmodus deaktiviert.") == 0 && kstrcmp(en, "Expert mode disabled.") == 0) return "Mode ahli dinonaktifkan.";
     if (kstrcmp(de, "Schalte zuerst den Expertenmodus ein.") == 0 && kstrcmp(en, "Enable expert mode first.") == 0) return "Aktifkan mode ahli terlebih dahulu.";
-    if (kstrcmp(de, "Einstellungen gespeichert.") == 0 && kstrcmp(en, "Settings saved.") == 0) return "Pengaturan disimpan.";
+    if (kstrcmp(de, "Kernelconfig gespeichert.") == 0 && kstrcmp(en, "Kernelconfig saved.") == 0) return "Pengaturan disimpan.";
     if (kstrcmp(de, "Speichern fehlgeschlagen. Wahrscheinlich keine virtuelle Platte.") == 0 && kstrcmp(en, "Save failed. Probably no virtual disk attached.") == 0) return "Gagal menyimpan. Mungkin tidak ada disk virtual terpasang.";
     if (kstrcmp(de, "Sprache umgeschaltet.") == 0 && kstrcmp(en, "Language switched.") == 0) return "Bahasa diganti.";
     if (kstrcmp(de, "Tastatur-Layout umgeschaltet.") == 0 && kstrcmp(en, "Keyboard layout switched.") == 0) return "Layout keyboard diganti.";
@@ -400,7 +472,7 @@ static const char* translate_id(const char* de, const char* en) {
     if (kstrcmp(de, "  memory               - Zeigt freien und belegten Speicher.") == 0 && kstrcmp(en, "  memory               - Shows free and used memory.") == 0) return "  memory               - Menampilkan memori kosong dan terpakai.";
     if (kstrcmp(de, "  paging               - Zeigt Paging, Frames und Page-Faults.") == 0 && kstrcmp(en, "  paging               - Shows paging, frames and page faults.") == 0) return "  paging               - Menampilkan paging, frame, dan page fault.";
     if (kstrcmp(de, "  history              - Zeigt deine letzten Befehle.") == 0 && kstrcmp(en, "  history              - Shows your recent commands.") == 0) return "  history              - Menampilkan perintah terakhirmu.";
-    if (kstrcmp(de, "  settings             - Oeffnet die neue Einstellungszentrale mit Kategorien und Expertenmodus.") == 0 && kstrcmp(en, "  settings             - Opens the new settings center with categories and expert mode.") == 0) return "  settings             - Membuka pusat pengaturan baru dengan kategori dan mode ahli.";
+    if (kstrcmp(de, "  kernelconfig         - Oeffnet die menuconfig-artige Kernel/System-Konfiguration.") == 0 && kstrcmp(en, "  kernelconfig         - Opens the menuconfig-like kernel/system configuration.") == 0) return "  kernelconfig         - Membuka konfigurasi kernel.";
     if (kstrcmp(de, "  whoami               - Zeigt Benutzername, Rolle und Home-Ordner.") == 0 && kstrcmp(en, "  whoami               - Shows user, role and home folder.") == 0) return "  whoami               - Menampilkan pengguna, peran, dan folder home.";
     if (kstrcmp(de, "  users                - Zeigt bekannte Benutzer, Gruppen und den System-Modus.") == 0 && kstrcmp(en, "  users                - Shows known users, groups and system mode.") == 0) return "  users                - Menampilkan pengguna, grup, dan mode sistem yang dikenal.";
     if (kstrcmp(de, "  login <n> [pw]       - Meldet einen normalen Benutzer an.") == 0 && kstrcmp(en, "  login <n> [pw]       - Signs in a regular user.") == 0) return "  login <n> [pw]       - Masuk sebagai pengguna biasa.";
@@ -419,7 +491,7 @@ static const char* translate_id(const char* de, const char* en) {
     if (kstrcmp(de, "Der System-Modus ist root-aehnlich: kein normaler Nutzer, sondern eine Rechte-Erweiterung.") == 0 && kstrcmp(en, "System mode is root-like: not a normal user, but a privilege elevation.") == 0) return "Mode sistem mirip root: bukan pengguna biasa, melainkan peningkatan hak akses.";
     if (kstrcmp(de, "Programmiert von Obsidian.") == 0 && kstrcmp(en, "Programmiert von Obsidian.") == 0) return "Diprogram oleh Obsidian.";
     if (kstrcmp(de, "Desktop-Platzhalter geoeffnet.") == 0 && kstrcmp(en, "Desktop placeholder opened.") == 0) return "Placeholder desktop dibuka.";
-    if (kstrcmp(de, "Nutze: open <settings|desktop|network|files|monitor>") == 0 && kstrcmp(en, "Use: open <settings|desktop|network|files|monitor>") == 0) return "Gunakan: open <settings|desktop|network|files|monitor>";
+    if (kstrcmp(de, "Nutze: open <kernelconfig|desktop|network|files|monitor>") == 0 && kstrcmp(en, "Use: open <kernelconfig|desktop|network|files|monitor>") == 0) return "Gunakan: open <kernelconfig|desktop|network|files|monitor>";
     if (kstrcmp(de, "Bildschirm geleert.") == 0 && kstrcmp(en, "Screen cleared.") == 0) return "Layar dibersihkan.";
     return en;
 }
@@ -758,6 +830,32 @@ static void print_processes(void) {
         }
         console_putc('\n');
     }
+}
+
+
+static void command_display(void) {
+    cbdd_info_t info;
+    cbdd_get_info(&info);
+    console_writeln(tr("Cyralith Basic Display Driver:", "Cyralith Basic Display Driver:"));
+    console_write("  Name: ");
+    console_writeln(info.driver_name);
+    console_write("  Status: ");
+    console_writeln(info.enabled != 0 ? tr("aktiv", "enabled") : tr("aus", "off"));
+    console_write("  Backend: ");
+    console_writeln(info.backend_name);
+    console_write("  Mode: ");
+    console_writeln(info.mode_name);
+    console_write("  Size: ");
+    console_write_dec(info.width);
+    console_write("x");
+    console_write_dec(info.height);
+    console_write(" @ ");
+    console_write_dec(info.bpp);
+    console_writeln("bpp");
+    console_write("  Flags: ");
+    console_write_hex(info.flags);
+    console_putc('\n');
+    console_writeln(tr("  Konfiguration: kernelconfig display", "  Configuration: kernelconfig display"));
 }
 
 static void print_jobs(void) {
@@ -1128,7 +1226,7 @@ static void print_network_status(void) {
         console_write(tr("  Expertenmodus: ", "  Expert mode: "));
         console_writeln(g_setting_driver_debug != 0 ? tr("Treiberdiagnose aktiv", "driver diagnostics active") : tr("kompakt", "compact"));
     }
-    console_writeln(tr3("  Tipp: In Settings > Netzwerk > Treiber oder per 'netdriver <name>' wechselst du den Treiber.", "  Tip: In Settings > Network > Driver or with 'netdriver <name>' you can switch drivers.", "  Tips: Di Settings > Jaringan > Driver atau dengan 'netdriver <nama>' kamu bisa mengganti driver."));
+    console_writeln(tr3("  Tipp: In Kernelconfig > Netzwerk > Treiber oder per 'netdriver <name>' wechselst du den Treiber.", "  Tip: In Kernelconfig > Network > Driver or with 'netdriver <name>' you can switch drivers.", "  Tips: Di Kernelconfig > Jaringan > Driver atau dengan 'netdriver <nama>' kamu bisa mengganti driver."));
 }
 
 
@@ -1234,7 +1332,7 @@ static void print_version(void) {
 static void print_quickstart(void) {
     console_writeln(tr("Schnellstart:", "Quick start:"));
     console_writeln(tr("  1. help              - Zeigt alle wichtigen Befehle.", "  1. help              - Shows the main commands."));
-    console_writeln(tr("  2. settings          - Oeffnet die uebersichtlichen Einstellungen.", "  2. settings          - Opens the clear settings screen."));
+    console_writeln(tr("  2. kernelconfig      - Oeffnet die menuconfig-artige Kernelconfig.", "  2. kernelconfig      - Opens the menuconfig-like kernel configuration."));
     console_writeln(tr("  3. whoami            - Zeigt, wer gerade angemeldet ist.", "  3. whoami            - Shows who is currently signed in."));
     console_writeln(tr("  4. cd ~              - Springt in deinen Home-Ordner.", "  4. cd ~              - Jumps to your home folder."));
     console_writeln(tr("  5. app list          - Zeigt installierte und optionale Apps.", "  5. app list          - Shows installed and optional apps."));
@@ -1291,10 +1389,14 @@ static void set_layout(const char* code) {
 
 static const char* settings_view_title(settings_view_t view) {
     switch (view) {
-        case SETTINGS_VIEW_HOME: return tr("Einstellungen", "Settings");
+        case SETTINGS_VIEW_HOME: return "Kernelconfig";
         case SETTINGS_VIEW_GENERAL: return tr("Allgemein", "General");
         case SETTINGS_VIEW_NETWORK: return tr("Netzwerk", "Network");
         case SETTINGS_VIEW_SECURITY: return tr("Sicherheit", "Security");
+        case SETTINGS_VIEW_DISPLAY: return tr("Anzeige / CBDD", "Display / CBDD");
+        case SETTINGS_VIEW_KERNEL: return tr("Kernel", "Kernel");
+        case SETTINGS_VIEW_CCS: return "CCS";
+        case SETTINGS_VIEW_FS: return "CyralithFS";
         case SETTINGS_VIEW_EXPERT: return tr("Expertenmodus", "Expert mode");
         default: return "?";
     }
@@ -1306,6 +1408,10 @@ static int settings_view_count(settings_view_t view) {
         case SETTINGS_VIEW_GENERAL: return SETTINGS_GENERAL_COUNT;
         case SETTINGS_VIEW_NETWORK: return SETTINGS_NETWORK_COUNT;
         case SETTINGS_VIEW_SECURITY: return SETTINGS_SECURITY_COUNT;
+        case SETTINGS_VIEW_DISPLAY: return SETTINGS_DISPLAY_COUNT;
+        case SETTINGS_VIEW_KERNEL: return SETTINGS_KERNEL_COUNT;
+        case SETTINGS_VIEW_CCS: return SETTINGS_CCS_COUNT;
+        case SETTINGS_VIEW_FS: return SETTINGS_FS_COUNT;
         case SETTINGS_VIEW_EXPERT: return SETTINGS_EXPERT_COUNT;
         default: return 0;
     }
@@ -1318,10 +1424,14 @@ static const char* settings_item_title(settings_view_t view, int index) {
                 case SETTINGS_HOME_GENERAL: return tr("Allgemein", "General");
                 case SETTINGS_HOME_NETWORK: return tr("Netzwerk", "Network");
                 case SETTINGS_HOME_SECURITY: return tr("Sicherheit", "Security");
+                case SETTINGS_HOME_DISPLAY: return tr("Anzeige / Basic Display Driver", "Display / Basic Display Driver");
+                case SETTINGS_HOME_KERNEL: return tr("Kernel-Schutz", "Kernel protection");
+                case SETTINGS_HOME_CCS: return "CCS";
+                case SETTINGS_HOME_FS: return "CyralithFS";
                 case SETTINGS_HOME_EXPERT_MODE: return tr("Expertenmodus", "Expert mode");
                 case SETTINGS_HOME_EXPERT_PAGE: return tr("Treiber & System tief", "Drivers & low-level");
                 case SETTINGS_HOME_SAVE: return tr("Jetzt speichern", "Save now");
-                case SETTINGS_HOME_EXIT: return tr("Einstellungen schliessen", "Close settings");
+                case SETTINGS_HOME_EXIT: return tr("Kernelconfig schliessen", "Close kernelconfig");
                 default: return "?";
             }
         case SETTINGS_VIEW_GENERAL:
@@ -1330,6 +1440,8 @@ static const char* settings_item_title(settings_view_t view, int index) {
                 case SETTINGS_GENERAL_KEYBOARD: return tr("Tastatur-Layout", "Keyboard layout");
                 case SETTINGS_GENERAL_AI: return tr("KI-Hilfe", "AI help");
                 case SETTINGS_GENERAL_HINTS: return tr("Start-Hinweise", "Startup hints");
+                case SETTINGS_GENERAL_AUTOSAVE: return tr("Kernelconfig automatisch speichern", "Auto-save kernelconfig");
+                case SETTINGS_GENERAL_VERBOSE_DIAG: return tr("Diagnose-Texte ausfuehrlicher", "More verbose diagnostics");
                 case SETTINGS_GENERAL_BACK: return tr("Zurueck", "Back");
                 default: return "?";
             }
@@ -1341,6 +1453,54 @@ static const char* settings_item_title(settings_view_t view, int index) {
                 case SETTINGS_NETWORK_GATEWAY: return tr("Gateway", "Gateway");
                 case SETTINGS_NETWORK_DRIVER: return tr3("Treiber", "Driver", "Driver");
                 case SETTINGS_NETWORK_BACK: return tr("Zurueck", "Back");
+                default: return "?";
+            }
+        case SETTINGS_VIEW_DISPLAY:
+            switch (index) {
+                case SETTINGS_DISPLAY_ENABLE: return tr("CBDD aktiv", "CBDD enabled");
+                case SETTINGS_DISPLAY_BACKEND: return tr("Backend", "Backend");
+                case SETTINGS_DISPLAY_MODE: return tr("Modus", "Mode");
+                case SETTINGS_DISPLAY_CURSOR: return tr("Text-Cursor", "Text cursor");
+                case SETTINGS_DISPLAY_CONTRAST: return tr("Hoher Kontrast", "High contrast");
+                case SETTINGS_DISPLAY_DEBUG: return tr("Debug-Overlay", "Debug overlay");
+                case SETTINGS_DISPLAY_PROBE: return tr("Treiber pruefen", "Probe driver");
+                case SETTINGS_DISPLAY_RESET: return tr("Safe-Reset", "Safe reset");
+                case SETTINGS_DISPLAY_BACK: return tr("Zurueck", "Back");
+                default: return "?";
+            }
+        case SETTINGS_VIEW_KERNEL:
+            switch (index) {
+                case SETTINGS_KERNEL_SAFE_DEFAULTS: return tr("Sichere Defaults erzwingen", "Enforce safe defaults");
+                case SETTINGS_KERNEL_AUDIT: return tr("Audit-Log aktiv", "Audit log enabled");
+                case SETTINGS_KERNEL_RECOVERY: return tr("Recovery-Basis aktiv", "Recovery baseline enabled");
+                case SETTINGS_KERNEL_UPDATE_GUARD: return tr("Update-Guard vormerken", "Reserve update guard");
+                case SETTINGS_KERNEL_SYSTEM_PATHS: return tr("Systempfade schuetzen", "Protect system paths");
+                case SETTINGS_KERNEL_SYSDO_SINGLE: return tr("Systemrechte nur einzeln", "System rights single command");
+                case SETTINGS_KERNEL_BACK: return tr("Zurueck", "Back");
+                default: return "?";
+            }
+        case SETTINGS_VIEW_CCS:
+            switch (index) {
+                case SETTINGS_CCS_PROFILE: return tr("CCS-Profil", "CCS profile");
+                case SETTINGS_CCS_APP_ISOLATION: return tr("App-Isolation vormerken", "Reserve app isolation");
+                case SETTINGS_CCS_MIN_NETWORK: return tr("Minimale Netzwerk-Exposition", "Minimal network exposure");
+                case SETTINGS_CCS_SIGNED_SOURCES: return tr("Signierte Quellen vormerken", "Reserve signed sources");
+                case SETTINGS_CCS_ROLLBACK: return tr("Rollback-Modell vormerken", "Reserve rollback model");
+                case SETTINGS_CCS_PACKAGE_PATH: return tr("Ein primaerer Paketpfad", "One primary package path");
+                case SETTINGS_CCS_BACK: return tr("Zurueck", "Back");
+                default: return "?";
+            }
+        case SETTINGS_VIEW_FS:
+            switch (index) {
+                case SETTINGS_FS_PERSISTENCE: return tr("FS-Persistenz erlauben", "Allow FS persistence");
+                case SETTINGS_FS_AUTOSAVE: return tr("FS automatisch speichern", "Auto-save FS");
+                case SETTINGS_FS_STRICT_PERMS: return tr("FS-Rechte strikt pruefen", "Strict FS permissions");
+                case SETTINGS_FS_SYSTEM_PATHS: return tr("Systempfade im FS schuetzen", "Protect system paths in FS");
+                case SETTINGS_FS_X32_CONSOLE: return tr("x32 FS Console aktiv", "x32 FS Console enabled");
+                case SETTINGS_FS_RECOVERY_SCAN: return tr("FS-Recovery-Scan vormerken", "Reserve FS recovery scan");
+                case SETTINGS_FS_SAVE_NOW: return tr("CyralithFS jetzt speichern", "Save CyralithFS now");
+                case SETTINGS_FS_LOAD_NOW: return tr("CyralithFS jetzt laden", "Load CyralithFS now");
+                case SETTINGS_FS_BACK: return tr("Zurueck", "Back");
                 default: return "?";
             }
         case SETTINGS_VIEW_SECURITY:
@@ -1355,8 +1515,9 @@ static const char* settings_item_title(settings_view_t view, int index) {
             switch (index) {
                 case SETTINGS_EXPERT_AUTONET: return tr("Netzwerktreiber beim Start versuchen", "Try network driver at startup");
                 case SETTINGS_EXPERT_DRIVER_DEBUG: return tr("Treiber-Diagnose erweitern", "Driver diagnostics");
-                case SETTINGS_EXPERT_AUTOSAVE: return tr("Aenderungen automatisch speichern", "Auto-save changes");
-                case SETTINGS_EXPERT_VERBOSE_DIAG: return tr("Ausfuehrlichere Diagnose", "Verbose diagnostics");
+                case SETTINGS_EXPERT_BOOT_SAFE: return tr("Boot-Safemode vormerken", "Reserve boot safemode");
+                case SETTINGS_EXPERT_PANIC_VERBOSE: return tr("Panic-Ausgabe detaillierter", "More detailed panic output");
+                case SETTINGS_EXPERT_X32_CLI_STUB: return tr("Desktop x32 FS-CLI vorbereiten", "Reserve desktop x32 FS-CLI");
                 case SETTINGS_EXPERT_BACK: return tr("Zurueck", "Back");
                 default: return "?";
             }
@@ -1370,111 +1531,117 @@ static void settings_item_value(settings_view_t view, int index, char* out, size
     switch (view) {
         case SETTINGS_VIEW_HOME:
             switch (index) {
-                case SETTINGS_HOME_GENERAL:
-                    kstrcpy(out, language_label_full());
-                    break;
-                case SETTINGS_HOME_NETWORK:
-                    kstrcpy(out, network_hostname());
-                    break;
-                case SETTINGS_HOME_SECURITY:
-                    kstrcpy(out, g_setting_require_program_approval != 0 ? tr("streng", "strict") : tr("locker", "relaxed"));
-                    break;
-                case SETTINGS_HOME_EXPERT_MODE:
-                    kstrcpy(out, g_setting_expert_mode != 0 ? tr("aktiv", "enabled") : tr("aus", "off"));
-                    break;
-                case SETTINGS_HOME_EXPERT_PAGE:
-                    kstrcpy(out, g_setting_expert_mode != 0 ? tr("verfuegbar", "available") : tr("erst aktivieren", "enable first"));
-                    break;
-                case SETTINGS_HOME_SAVE:
-                    kstrcpy(out, afs_persistence_available() != 0 ? tr("virtuelle Platte", "virtual disk") : tr("nur RAM", "RAM only"));
-                    break;
-                case SETTINGS_HOME_EXIT:
-                    kstrcpy(out, tr("zur Shell", "to shell"));
-                    break;
+                case SETTINGS_HOME_GENERAL: kstrcpy(out, language_label_full()); break;
+                case SETTINGS_HOME_NETWORK: kstrcpy(out, network_hostname()); break;
+                case SETTINGS_HOME_SECURITY: kstrcpy(out, g_setting_require_program_approval != 0 ? tr("streng", "strict") : tr("locker", "relaxed")); break;
+                case SETTINGS_HOME_DISPLAY: kstrcpy(out, cbdd_backend_name()); break;
+                case SETTINGS_HOME_KERNEL: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_SAFE_DEFAULTS) != 0 ? tr("geschuetzt", "protected") : tr("locker", "relaxed")); break;
+                case SETTINGS_HOME_CCS: kstrcpy(out, ccs_settings_profile_name()); break;
+                case SETTINGS_HOME_FS: kstrcpy(out, afs_persistence_available() != 0 ? tr("persistenz bereit", "persistence ready") : tr("RAM-Modus", "RAM mode")); break;
+                case SETTINGS_HOME_EXPERT_MODE: kstrcpy(out, g_setting_expert_mode != 0 ? tr("aktiv", "enabled") : tr("aus", "off")); break;
+                case SETTINGS_HOME_EXPERT_PAGE: kstrcpy(out, g_setting_expert_mode != 0 ? tr("verfuegbar", "available") : tr("erst aktivieren", "enable first")); break;
+                case SETTINGS_HOME_SAVE: kstrcpy(out, afs_persistence_available() != 0 ? tr("virtuelle Platte", "virtual disk") : tr("nur RAM", "RAM only")); break;
+                case SETTINGS_HOME_EXIT: kstrcpy(out, tr("zur Shell", "to shell")); break;
                 default: break;
             }
             break;
         case SETTINGS_VIEW_GENERAL:
             switch (index) {
-                case SETTINGS_GENERAL_LANGUAGE:
-                    kstrcpy(out, language_label_short());
-                    break;
-                case SETTINGS_GENERAL_KEYBOARD:
-                    kstrcpy(out, keyboard_get_layout() == KEYBOARD_LAYOUT_DE ? "DE / QWERTZ" : "US / QWERTY");
-                    break;
-                case SETTINGS_GENERAL_AI:
-                    kstrcpy(out, g_setting_ai_smart != 0 ? tr("smarter Helfer", "smarter helper") : tr("einfacher Helfer", "basic helper"));
-                    break;
-                case SETTINGS_GENERAL_HINTS:
-                    kstrcpy(out, g_setting_startup_hints != 0 ? tr("anzeigen", "show") : tr("ausblenden", "hide"));
-                    break;
-                case SETTINGS_GENERAL_BACK:
-                    kstrcpy(out, tr("zur Uebersicht", "to overview"));
-                    break;
+                case SETTINGS_GENERAL_LANGUAGE: kstrcpy(out, language_label_short()); break;
+                case SETTINGS_GENERAL_KEYBOARD: kstrcpy(out, keyboard_get_layout() == KEYBOARD_LAYOUT_DE ? "DE / QWERTZ" : "US / QWERTY"); break;
+                case SETTINGS_GENERAL_AI: kstrcpy(out, g_setting_ai_smart != 0 ? tr("smarter Helfer", "smarter helper") : tr("einfacher Helfer", "basic helper")); break;
+                case SETTINGS_GENERAL_HINTS: kstrcpy(out, g_setting_startup_hints != 0 ? tr("anzeigen", "show") : tr("ausblenden", "hide")); break;
+                case SETTINGS_GENERAL_AUTOSAVE: kstrcpy(out, g_setting_autosave != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_GENERAL_VERBOSE_DIAG: kstrcpy(out, g_setting_verbose_diag != 0 ? tr("ausfuehrlich", "verbose") : tr("normal", "normal")); break;
+                case SETTINGS_GENERAL_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
                 default: break;
             }
             break;
         case SETTINGS_VIEW_NETWORK:
             switch (index) {
-                case SETTINGS_NETWORK_HOSTNAME:
-                    kstrcpy(out, network_hostname());
-                    break;
-                case SETTINGS_NETWORK_DHCP:
-                    kstrcpy(out, network_dhcp_enabled() != 0 ? tr("aktiv", "enabled") : tr("aus", "off"));
-                    break;
-                case SETTINGS_NETWORK_IP:
-                    kstrcpy(out, network_ip());
-                    break;
-                case SETTINGS_NETWORK_GATEWAY:
-                    kstrcpy(out, network_gateway());
-                    break;
-                case SETTINGS_NETWORK_DRIVER:
-                    kstrcpy(out, network_driver_preference_name());
-                    break;
-                case SETTINGS_NETWORK_BACK:
-                    kstrcpy(out, tr("zur Uebersicht", "to overview"));
-                    break;
+                case SETTINGS_NETWORK_HOSTNAME: kstrcpy(out, network_hostname()); break;
+                case SETTINGS_NETWORK_DHCP: kstrcpy(out, network_dhcp_enabled() != 0 ? tr("aktiv", "enabled") : tr("aus", "off")); break;
+                case SETTINGS_NETWORK_IP: kstrcpy(out, network_ip()); break;
+                case SETTINGS_NETWORK_GATEWAY: kstrcpy(out, network_gateway()); break;
+                case SETTINGS_NETWORK_DRIVER: kstrcpy(out, network_driver_preference_name()); break;
+                case SETTINGS_NETWORK_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
+                default: break;
+            }
+            break;
+        case SETTINGS_VIEW_DISPLAY:
+            switch (index) {
+                case SETTINGS_DISPLAY_ENABLE: kstrcpy(out, cbdd_is_enabled() != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_DISPLAY_BACKEND: kstrcpy(out, cbdd_backend_name()); break;
+                case SETTINGS_DISPLAY_MODE: kstrcpy(out, cbdd_mode_name()); break;
+                case SETTINGS_DISPLAY_CURSOR: kstrcpy(out, (cbdd_flags() & CBDD_FLAG_CURSOR_VISIBLE) != 0U ? tr("sichtbar", "visible") : tr("versteckt", "hidden")); break;
+                case SETTINGS_DISPLAY_CONTRAST: kstrcpy(out, (cbdd_flags() & CBDD_FLAG_HIGH_CONTRAST) != 0U ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_DISPLAY_DEBUG: kstrcpy(out, (cbdd_flags() & CBDD_FLAG_DEBUG_OVERLAY) != 0U ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_DISPLAY_PROBE: kstrcpy(out, tr("Status lesen", "read status")); break;
+                case SETTINGS_DISPLAY_RESET: kstrcpy(out, tr("VGA 80x25", "VGA 80x25")); break;
+                case SETTINGS_DISPLAY_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
+                default: break;
+            }
+            break;
+        case SETTINGS_VIEW_KERNEL:
+            switch (index) {
+                case SETTINGS_KERNEL_SAFE_DEFAULTS: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_SAFE_DEFAULTS) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_KERNEL_AUDIT: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_AUDIT_LOG) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_KERNEL_RECOVERY: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_RECOVERY_READY) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_KERNEL_UPDATE_GUARD: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_UPDATE_GUARD) != 0 ? tr("vorgemerkt", "reserved") : tr("aus", "off")); break;
+                case SETTINGS_KERNEL_SYSTEM_PATHS: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_PROTECT_SYSTEM_PATHS) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_KERNEL_SYSDO_SINGLE: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_SYSDO_SINGLE_COMMAND) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_KERNEL_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
+                default: break;
+            }
+            break;
+        case SETTINGS_VIEW_CCS:
+            switch (index) {
+                case SETTINGS_CCS_PROFILE: kstrcpy(out, ccs_settings_profile_name()); break;
+                case SETTINGS_CCS_APP_ISOLATION: kstrcpy(out, ccs_settings_flag(CCS_SETTINGS_FLAG_APP_ISOLATION_PLAN) != 0 ? tr("geplant", "planned") : tr("aus", "off")); break;
+                case SETTINGS_CCS_MIN_NETWORK: kstrcpy(out, ccs_settings_flag(CCS_SETTINGS_FLAG_MINIMAL_NETWORK) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_CCS_SIGNED_SOURCES: kstrcpy(out, ccs_settings_flag(CCS_SETTINGS_FLAG_SIGNED_SOURCES_PLAN) != 0 ? tr("geplant", "planned") : tr("aus", "off")); break;
+                case SETTINGS_CCS_ROLLBACK: kstrcpy(out, ccs_settings_flag(CCS_SETTINGS_FLAG_ROLLBACK_PLAN) != 0 ? tr("geplant", "planned") : tr("aus", "off")); break;
+                case SETTINGS_CCS_PACKAGE_PATH: kstrcpy(out, ccs_settings_flag(CCS_SETTINGS_FLAG_PRIMARY_PACKAGE_PATH) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_CCS_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
+                default: break;
+            }
+            break;
+        case SETTINGS_VIEW_FS:
+            switch (index) {
+                case SETTINGS_FS_PERSISTENCE: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_FS_PERSISTENCE) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_FS_AUTOSAVE: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_FS_AUTOSAVE) != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_FS_STRICT_PERMS: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_FS_STRICT_PERMS) != 0 ? tr("streng", "strict") : tr("locker", "relaxed")); break;
+                case SETTINGS_FS_SYSTEM_PATHS: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_PROTECT_SYSTEM_PATHS) != 0 ? tr("geschuetzt", "protected") : tr("offen", "open")); break;
+                case SETTINGS_FS_X32_CONSOLE: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_FS_X32_CONSOLE) != 0 ? tr("aktiv", "enabled") : tr("aus", "off")); break;
+                case SETTINGS_FS_RECOVERY_SCAN: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_FS_RECOVERY_SCAN) != 0 ? tr("vorgemerkt", "reserved") : tr("aus", "off")); break;
+                case SETTINGS_FS_SAVE_NOW: kstrcpy(out, afs_persistence_available() != 0 ? tr("moeglich", "available") : tr("keine Platte", "no disk")); break;
+                case SETTINGS_FS_LOAD_NOW: kstrcpy(out, afs_persistence_available() != 0 ? tr("moeglich", "available") : tr("keine Platte", "no disk")); break;
+                case SETTINGS_FS_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
                 default: break;
             }
             break;
         case SETTINGS_VIEW_SECURITY:
             switch (index) {
-                case SETTINGS_SECURITY_APPROVAL:
-                    kstrcpy(out, g_setting_require_program_approval != 0 ? tr("Pflicht", "required") : tr("optional lokal", "optional local"));
-                    break;
-                case SETTINGS_SECURITY_LEGACY:
-                    kstrcpy(out, g_setting_allow_legacy_commands != 0 ? tr("erlaubt", "allowed") : tr("gesperrt", "blocked"));
-                    break;
-                case SETTINGS_SECURITY_AUTOAPPROVE:
-                    kstrcpy(out, g_setting_default_autoapprove != 0 ? tr("ja", "yes") : tr("nein", "no"));
-                    break;
-                case SETTINGS_SECURITY_BACK:
-                    kstrcpy(out, tr("zur Uebersicht", "to overview"));
-                    break;
+                case SETTINGS_SECURITY_APPROVAL: kstrcpy(out, g_setting_require_program_approval != 0 ? tr("Pflicht", "required") : tr("optional lokal", "optional local")); break;
+                case SETTINGS_SECURITY_LEGACY: kstrcpy(out, g_setting_allow_legacy_commands != 0 ? tr("erlaubt", "allowed") : tr("gesperrt", "blocked")); break;
+                case SETTINGS_SECURITY_AUTOAPPROVE: kstrcpy(out, g_setting_default_autoapprove != 0 ? tr("ja", "yes") : tr("nein", "no")); break;
+                case SETTINGS_SECURITY_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
                 default: break;
             }
             break;
         case SETTINGS_VIEW_EXPERT:
             switch (index) {
-                case SETTINGS_EXPERT_AUTONET:
-                    kstrcpy(out, g_setting_driver_autostart != 0 ? tr("an", "on") : tr("aus", "off"));
-                    break;
-                case SETTINGS_EXPERT_DRIVER_DEBUG:
-                    kstrcpy(out, g_setting_driver_debug != 0 ? tr("mehr Details", "more details") : tr("kompakt", "compact"));
-                    break;
-                case SETTINGS_EXPERT_AUTOSAVE:
-                    kstrcpy(out, g_setting_autosave != 0 ? tr("an", "on") : tr("aus", "off"));
-                    break;
-                case SETTINGS_EXPERT_VERBOSE_DIAG:
-                    kstrcpy(out, g_setting_verbose_diag != 0 ? tr("ausfuehrlich", "verbose") : tr("normal", "normal"));
-                    break;
-                case SETTINGS_EXPERT_BACK:
-                    kstrcpy(out, tr("zur Uebersicht", "to overview"));
-                    break;
+                case SETTINGS_EXPERT_AUTONET: kstrcpy(out, g_setting_driver_autostart != 0 ? tr("an", "on") : tr("aus", "off")); break;
+                case SETTINGS_EXPERT_DRIVER_DEBUG: kstrcpy(out, g_setting_driver_debug != 0 ? tr("mehr Details", "more details") : tr("kompakt", "compact")); break;
+                case SETTINGS_EXPERT_BOOT_SAFE: kstrcpy(out, g_setting_boot_safe != 0 ? tr("vorgemerkt", "reserved") : tr("normal", "normal")); break;
+                case SETTINGS_EXPERT_PANIC_VERBOSE: kstrcpy(out, g_setting_panic_verbose != 0 ? tr("detail", "detailed") : tr("kompakt", "compact")); break;
+                case SETTINGS_EXPERT_X32_CLI_STUB: kstrcpy(out, ksettings_flag(KSETTINGS_FLAG_FS_X32_CONSOLE) != 0 ? tr("aktiv", "enabled") : tr("aus", "off")); break;
+                case SETTINGS_EXPERT_BACK: kstrcpy(out, tr("zur Uebersicht", "to overview")); break;
                 default: break;
             }
             break;
-        default: break;
+        default:
+            break;
     }
     if (max > 0U) {
         out[max - 1U] = '\0';
@@ -1488,7 +1655,13 @@ static int settings_item_requires_system(settings_view_t view, int index) {
     if (view == SETTINGS_VIEW_NETWORK) {
         return index == SETTINGS_NETWORK_HOSTNAME || index == SETTINGS_NETWORK_DHCP || index == SETTINGS_NETWORK_IP || index == SETTINGS_NETWORK_GATEWAY || index == SETTINGS_NETWORK_DRIVER;
     }
-    if (view == SETTINGS_VIEW_SECURITY || view == SETTINGS_VIEW_EXPERT) {
+    if (view == SETTINGS_VIEW_DISPLAY) {
+        return index != SETTINGS_DISPLAY_BACK && index != SETTINGS_DISPLAY_PROBE;
+    }
+    if (view == SETTINGS_VIEW_KERNEL || view == SETTINGS_VIEW_CCS || view == SETTINGS_VIEW_FS || view == SETTINGS_VIEW_SECURITY || view == SETTINGS_VIEW_EXPERT) {
+        if (view == SETTINGS_VIEW_FS && (index == SETTINGS_FS_SAVE_NOW || index == SETTINGS_FS_LOAD_NOW)) {
+            return 0;
+        }
         return 1;
     }
     return 0;
@@ -1498,71 +1671,303 @@ static void settings_set_notice(const char* de, const char* en) {
     kstrcpy(g_settings_notice, tr(de, en));
 }
 
-static void settings_box_line(const char* text) {
-    size_t i;
-    size_t len = kstrlen(text);
-    console_write("| ");
-    console_write(text);
-    for (i = len; i < 76U; ++i) {
-        console_putc(' ');
+
+static int settings_item_is_toggle(settings_view_t view, int index) {
+    if (view == SETTINGS_VIEW_HOME) {
+        return index == SETTINGS_HOME_EXPERT_MODE;
     }
-    console_writeln(" |");
+    if (view == SETTINGS_VIEW_GENERAL) {
+        return index == SETTINGS_GENERAL_AI || index == SETTINGS_GENERAL_HINTS || index == SETTINGS_GENERAL_AUTOSAVE || index == SETTINGS_GENERAL_VERBOSE_DIAG;
+    }
+    if (view == SETTINGS_VIEW_NETWORK) {
+        return index == SETTINGS_NETWORK_DHCP || index == SETTINGS_NETWORK_DRIVER;
+    }
+    if (view == SETTINGS_VIEW_DISPLAY) {
+        return index == SETTINGS_DISPLAY_ENABLE || index == SETTINGS_DISPLAY_BACKEND || index == SETTINGS_DISPLAY_MODE ||
+               index == SETTINGS_DISPLAY_CURSOR || index == SETTINGS_DISPLAY_CONTRAST || index == SETTINGS_DISPLAY_DEBUG;
+    }
+    if (view == SETTINGS_VIEW_KERNEL) {
+        return index != SETTINGS_KERNEL_BACK;
+    }
+    if (view == SETTINGS_VIEW_CCS) {
+        return index != SETTINGS_CCS_BACK;
+    }
+    if (view == SETTINGS_VIEW_FS) {
+        return index == SETTINGS_FS_PERSISTENCE || index == SETTINGS_FS_AUTOSAVE || index == SETTINGS_FS_STRICT_PERMS ||
+               index == SETTINGS_FS_SYSTEM_PATHS || index == SETTINGS_FS_X32_CONSOLE || index == SETTINGS_FS_RECOVERY_SCAN;
+    }
+    if (view == SETTINGS_VIEW_SECURITY) {
+        return index != SETTINGS_SECURITY_BACK;
+    }
+    if (view == SETTINGS_VIEW_EXPERT) {
+        return index != SETTINGS_EXPERT_BACK;
+    }
+    return 0;
 }
 
-static void settings_draw_easter_egg(void) {
-    settings_box_line("");
-    settings_box_line(tr3("UI-Sprachen aktiv: Deutsch, English, Bahasa Indonesia.",
-                          "UI languages active: German, English, Bahasa Indonesia.",
-                          "Bahasa antarmuka aktif: Jerman, Inggris, Bahasa Indonesia."));
-    settings_box_line(tr3("Tipp: Mit 'lang id' oder im Menue wechselst du die Shell-Sprache.",
-                          "Tip: Use 'lang id' or the menu to switch the shell language.",
-                          "Tips: Gunakan 'lang id' atau menu untuk mengganti bahasa shell."));
+static int settings_item_is_on(settings_view_t view, int index) {
+    if (view == SETTINGS_VIEW_HOME && index == SETTINGS_HOME_EXPERT_MODE) { return g_setting_expert_mode; }
+    if (view == SETTINGS_VIEW_GENERAL) {
+        if (index == SETTINGS_GENERAL_AI) { return g_setting_ai_smart; }
+        if (index == SETTINGS_GENERAL_HINTS) { return g_setting_startup_hints; }
+        if (index == SETTINGS_GENERAL_AUTOSAVE) { return g_setting_autosave; }
+        if (index == SETTINGS_GENERAL_VERBOSE_DIAG) { return g_setting_verbose_diag; }
+    }
+    if (view == SETTINGS_VIEW_NETWORK) {
+        if (index == SETTINGS_NETWORK_DHCP) { return network_dhcp_enabled(); }
+        if (index == SETTINGS_NETWORK_DRIVER) { return 1; }
+    }
+    if (view == SETTINGS_VIEW_DISPLAY) {
+        if (index == SETTINGS_DISPLAY_ENABLE) { return cbdd_is_enabled(); }
+        if (index == SETTINGS_DISPLAY_BACKEND) { return cbdd_backend() != CBDD_BACKEND_VGA_TEXT; }
+        if (index == SETTINGS_DISPLAY_MODE) { return cbdd_mode() != CBDD_MODE_TEXT_80X25; }
+        if (index == SETTINGS_DISPLAY_CURSOR) { return (cbdd_flags() & CBDD_FLAG_CURSOR_VISIBLE) != 0U ? 1 : 0; }
+        if (index == SETTINGS_DISPLAY_CONTRAST) { return (cbdd_flags() & CBDD_FLAG_HIGH_CONTRAST) != 0U ? 1 : 0; }
+        if (index == SETTINGS_DISPLAY_DEBUG) { return (cbdd_flags() & CBDD_FLAG_DEBUG_OVERLAY) != 0U ? 1 : 0; }
+    }
+    if (view == SETTINGS_VIEW_KERNEL) {
+        if (index == SETTINGS_KERNEL_SAFE_DEFAULTS) { return ksettings_flag(KSETTINGS_FLAG_SAFE_DEFAULTS); }
+        if (index == SETTINGS_KERNEL_AUDIT) { return ksettings_flag(KSETTINGS_FLAG_AUDIT_LOG); }
+        if (index == SETTINGS_KERNEL_RECOVERY) { return ksettings_flag(KSETTINGS_FLAG_RECOVERY_READY); }
+        if (index == SETTINGS_KERNEL_UPDATE_GUARD) { return ksettings_flag(KSETTINGS_FLAG_UPDATE_GUARD); }
+        if (index == SETTINGS_KERNEL_SYSTEM_PATHS) { return ksettings_flag(KSETTINGS_FLAG_PROTECT_SYSTEM_PATHS); }
+        if (index == SETTINGS_KERNEL_SYSDO_SINGLE) { return ksettings_flag(KSETTINGS_FLAG_SYSDO_SINGLE_COMMAND); }
+    }
+    if (view == SETTINGS_VIEW_CCS) {
+        if (index == SETTINGS_CCS_PROFILE) { return ccs_settings_profile() != CCS_SETTINGS_BASELINE; }
+        if (index == SETTINGS_CCS_APP_ISOLATION) { return ccs_settings_flag(CCS_SETTINGS_FLAG_APP_ISOLATION_PLAN); }
+        if (index == SETTINGS_CCS_MIN_NETWORK) { return ccs_settings_flag(CCS_SETTINGS_FLAG_MINIMAL_NETWORK); }
+        if (index == SETTINGS_CCS_SIGNED_SOURCES) { return ccs_settings_flag(CCS_SETTINGS_FLAG_SIGNED_SOURCES_PLAN); }
+        if (index == SETTINGS_CCS_ROLLBACK) { return ccs_settings_flag(CCS_SETTINGS_FLAG_ROLLBACK_PLAN); }
+        if (index == SETTINGS_CCS_PACKAGE_PATH) { return ccs_settings_flag(CCS_SETTINGS_FLAG_PRIMARY_PACKAGE_PATH); }
+    }
+    if (view == SETTINGS_VIEW_FS) {
+        if (index == SETTINGS_FS_PERSISTENCE) { return ksettings_flag(KSETTINGS_FLAG_FS_PERSISTENCE); }
+        if (index == SETTINGS_FS_AUTOSAVE) { return ksettings_flag(KSETTINGS_FLAG_FS_AUTOSAVE); }
+        if (index == SETTINGS_FS_STRICT_PERMS) { return ksettings_flag(KSETTINGS_FLAG_FS_STRICT_PERMS); }
+        if (index == SETTINGS_FS_SYSTEM_PATHS) { return ksettings_flag(KSETTINGS_FLAG_PROTECT_SYSTEM_PATHS); }
+        if (index == SETTINGS_FS_X32_CONSOLE) { return ksettings_flag(KSETTINGS_FLAG_FS_X32_CONSOLE); }
+        if (index == SETTINGS_FS_RECOVERY_SCAN) { return ksettings_flag(KSETTINGS_FLAG_FS_RECOVERY_SCAN); }
+    }
+    if (view == SETTINGS_VIEW_SECURITY) {
+        if (index == SETTINGS_SECURITY_APPROVAL) { return g_setting_require_program_approval; }
+        if (index == SETTINGS_SECURITY_LEGACY) { return g_setting_allow_legacy_commands; }
+        if (index == SETTINGS_SECURITY_AUTOAPPROVE) { return g_setting_default_autoapprove; }
+    }
+    if (view == SETTINGS_VIEW_EXPERT) {
+        if (index == SETTINGS_EXPERT_AUTONET) { return g_setting_driver_autostart; }
+        if (index == SETTINGS_EXPERT_DRIVER_DEBUG) { return g_setting_driver_debug; }
+        if (index == SETTINGS_EXPERT_BOOT_SAFE) { return g_setting_boot_safe; }
+        if (index == SETTINGS_EXPERT_PANIC_VERBOSE) { return g_setting_panic_verbose; }
+        if (index == SETTINGS_EXPERT_X32_CLI_STUB) { return ksettings_flag(KSETTINGS_FLAG_FS_X32_CONSOLE); }
+    }
+    return 0;
 }
 
+static void settings_line_fill(char* out, char fill) {
+    size_t i;
+    for (i = 0U; i < 80U; ++i) {
+        out[i] = fill;
+    }
+    out[80] = '\0';
+}
+
+static size_t settings_append(char* out, size_t pos, size_t max, const char* text) {
+    while (*text != '\0' && pos + 1U < max) {
+        out[pos++] = *text++;
+    }
+    out[pos] = '\0';
+    return pos;
+}
+
+static void settings_line_put(char* out, int col, const char* text) {
+    int x = col;
+    if (text == (const char*)0) {
+        return;
+    }
+    while (*text != '\0' && x < 80) {
+        if (x >= 0) {
+            out[x] = *text;
+        }
+        ++text;
+        ++x;
+    }
+}
+
+static void settings_write_color_line(uint8_t fg, uint8_t bg, const char* line) {
+    console_set_color(fg, bg);
+    console_write(line);
+    console_putc('\n');
+}
+
+static void settings_write_plain_line(uint8_t fg, uint8_t bg) {
+    char line[81];
+    settings_line_fill(line, ' ');
+    settings_write_color_line(fg, bg, line);
+}
+
+static void settings_write_centered_line(uint8_t fg, uint8_t bg, const char* text) {
+    char line[81];
+    int col = 0;
+    size_t len = kstrlen(text);
+    settings_line_fill(line, ' ');
+    if (len < 80U) {
+        col = (int)((80U - len) / 2U);
+    }
+    settings_line_put(line, col, text);
+    settings_write_color_line(fg, bg, line);
+}
+
+static void settings_build_row_text(char* out, size_t max, settings_view_t view, int index) {
+    const char* title = settings_item_title(view, index);
+    char value[96];
+    size_t pos = 0U;
+
+    if (max == 0U) {
+        return;
+    }
+    out[0] = '\0';
+    settings_item_value(view, index, value, sizeof(value));
+
+    if (view == SETTINGS_VIEW_HOME) {
+        if (index == SETTINGS_HOME_EXPERT_MODE) {
+            pos = settings_append(out, pos, max, settings_item_is_on(view, index) != 0 ? "[*] " : "[ ] ");
+            (void)settings_append(out, pos, max, title);
+            return;
+        }
+        if (index == SETTINGS_HOME_SAVE) {
+            settings_append(out, pos, max, "< Save >");
+            return;
+        }
+        if (index == SETTINGS_HOME_EXIT) {
+            settings_append(out, pos, max, "< Exit >");
+            return;
+        }
+        pos = settings_append(out, pos, max, title);
+        settings_append(out, pos, max, "  --->");
+        return;
+    }
+
+    if (index == SETTINGS_GENERAL_BACK || index == SETTINGS_NETWORK_BACK || index == SETTINGS_DISPLAY_BACK ||
+        index == SETTINGS_KERNEL_BACK || index == SETTINGS_CCS_BACK || index == SETTINGS_FS_BACK ||
+        index == SETTINGS_SECURITY_BACK || index == SETTINGS_EXPERT_BACK) {
+        settings_append(out, pos, max, "< Back >");
+        return;
+    }
+    if (view == SETTINGS_VIEW_FS && index == SETTINGS_FS_SAVE_NOW) {
+        settings_append(out, pos, max, "< Save >");
+        return;
+    }
+    if (view == SETTINGS_VIEW_FS && index == SETTINGS_FS_LOAD_NOW) {
+        settings_append(out, pos, max, "< Load >");
+        return;
+    }
+    if (view == SETTINGS_VIEW_DISPLAY && index == SETTINGS_DISPLAY_PROBE) {
+        settings_append(out, pos, max, "< Probe driver >");
+        return;
+    }
+    if (view == SETTINGS_VIEW_DISPLAY && index == SETTINGS_DISPLAY_RESET) {
+        settings_append(out, pos, max, "< Safe reset >");
+        return;
+    }
+
+    if (settings_item_is_toggle(view, index) != 0) {
+        pos = settings_append(out, pos, max, settings_item_is_on(view, index) != 0 ? "[*] " : "[ ] ");
+        settings_append(out, pos, max, title);
+        return;
+    }
+
+    pos = settings_append(out, pos, max, "< ");
+    pos = settings_append(out, pos, max, title);
+    pos = settings_append(out, pos, max, " >");
+    if (value[0] != '\0') {
+        pos = settings_append(out, pos, max, " (");
+        pos = settings_append(out, pos, max, value);
+        settings_append(out, pos, max, ")");
+    }
+}
+
+static const char* settings_screen_heading(void) {
+    switch (g_settings_view) {
+        case SETTINGS_VIEW_HOME: return "General setup";
+        case SETTINGS_VIEW_GENERAL: return "General setup";
+        case SETTINGS_VIEW_NETWORK: return "Networking";
+        case SETTINGS_VIEW_SECURITY: return "Security options";
+        case SETTINGS_VIEW_DISPLAY: return "Display / Basic Display Driver";
+        case SETTINGS_VIEW_KERNEL: return "Kernel protection";
+        case SETTINGS_VIEW_CCS: return "Core standard";
+        case SETTINGS_VIEW_FS: return "CyralithFS";
+        case SETTINGS_VIEW_EXPERT: return "Drivers and low-level";
+        default: return settings_view_title(g_settings_view);
+    }
+}
+
+static void settings_draw_menu_row(const char* text, int selected, int is_heading) {
+    char line[81];
+    settings_line_fill(line, ' ');
+    if (is_heading != 0) {
+        settings_line_put(line, 3, text);
+        settings_write_color_line(0xF, 0x1, line);
+        return;
+    }
+    settings_line_put(line, 4, text);
+    if (selected != 0) {
+        settings_write_color_line(0xF, 0x1, line);
+    } else {
+        settings_write_color_line(0x0, 0x7, line);
+    }
+}
 
 static void settings_draw_list(void) {
     int i;
     int count = settings_view_count(g_settings_view);
+    char line[81];
+    char row[160];
+    const char* view_title = settings_screen_heading();
+
     console_clear();
-    console_writeln("+==============================================================================+");
-    console_writeln("|                              Cyralith Settings                               |");
-    console_writeln("+==============================================================================+");
-    console_write("| ");
-    console_write(settings_view_title(g_settings_view));
-    console_writeln(g_settings_view == SETTINGS_VIEW_HOME ? tr(" - Uebersicht wie menuconfig, nur leichter.", " - overview like menuconfig, only easier.") : tr(" - Pfeile waehlen, Enter aendert.", " - arrows select, Enter changes."));
-    console_writeln("+------------------------------------------------------------------------------+");
+
+    settings_line_fill(line, ' ');
+    settings_line_put(line, 0, ".config - Cyralith/x86 2.7.1 Kernel Configuration");
+    settings_write_color_line(0xF, 0x1, line);
+
+    settings_write_plain_line(0x0, 0x7);
+    settings_write_centered_line(0x0, 0x7, "Arrow keys navigate the menu. <Enter> selects submenus, toggles, or actions.");
+    settings_write_centered_line(0x0, 0x7, "Press Q or Esc to exit. Open only with: sysdo cyralith kernelconfig");
+    settings_write_centered_line(0x0, 0x7, "Legend: [*] built-in  [ ] excluded  < > action/submenu  ---> submenu");
+    settings_write_centered_line(0x0, 0x7, "Protected kernel options stay inside the system-rights session.");
+    settings_write_plain_line(0x0, 0x7);
+
+    settings_write_centered_line(0x0, 0x7, "+--------------------------------------------------------------------------+");
+    settings_draw_menu_row(view_title, 0, 1);
+
     for (i = 0; i < count; ++i) {
-        char value[96];
-        settings_item_value(g_settings_view, i, value, sizeof(value));
-        console_write(i == g_settings_selected ? "> " : "  ");
-        console_write(settings_item_title(g_settings_view, i));
-        console_write(" : ");
-        console_write(value);
+        settings_build_row_text(row, sizeof(row), g_settings_view, i);
         if (settings_item_requires_system(g_settings_view, i) != 0 && user_is_master() == 0) {
-            console_write(" ");
-            console_write(tr("[system]", "[system]"));
+            settings_append(row, kstrlen(row), sizeof(row), " [system]");
         }
-        console_putc('\n');
+        settings_draw_menu_row(row, i == g_settings_selected, 0);
     }
-    console_writeln("+------------------------------------------------------------------------------+");
-    settings_draw_easter_egg();
-    console_writeln("+------------------------------------------------------------------------------+");
-    console_write(tr(" Sprache=", " Language="));
-    console_write(language_label_short());
-    console_write(tr("  Layout=", "  Layout="));
-    console_write(keyboard_get_layout() == KEYBOARD_LAYOUT_DE ? "DE" : "US");
-    console_write(tr("  KI=", "  AI="));
-    console_write(g_setting_ai_smart != 0 ? tr("smart", "smart") : tr("einfach", "basic"));
-    console_write(tr("  Expert=", "  Expert="));
-    console_writeln(g_setting_expert_mode != 0 ? tr("an", "on") : tr("aus", "off"));
-    console_writeln(tr(" Steuerung: Pfeil hoch/runter = waehlen, Enter = aendern, q oder Ctrl+C = zurueck.", " Controls: Up/Down = select, Enter = change, q or Ctrl+C = back."));
-    if (g_settings_notice[0] != '\0') {
-        console_write(tr(" Meldung: ", " Message: "));
-        console_writeln(g_settings_notice);
-    } else {
-        console_writeln(tr(" Meldung: bereit.", " Message: ready."));
+
+    for (; i < 10; ++i) {
+        settings_draw_menu_row("", 0, 0);
     }
-    console_writeln("+==============================================================================+");
+
+    settings_write_centered_line(0x0, 0x7, "+--------------------------------------------------------------------------+");
+    settings_write_plain_line(0x0, 0x1);
+    settings_write_centered_line(0xF, 0x1, "<Select>   < Exit >   < Help >   < Save >   < Load >");
+    settings_write_plain_line(0x0, 0x1);
+
+    settings_line_fill(line, ' ');
+    settings_line_put(line, 1, "Status: Kernelconfig active");
+    settings_line_put(line, 33, "Access: sysdo-only");
+    settings_line_put(line, 55, "Mode: menuconfig VGA");
+    settings_write_color_line(0x0, 0x7, line);
+
+    settings_line_fill(line, ' ');
+    settings_line_put(line, 1, "Message: ");
+    settings_line_put(line, 10, g_settings_notice[0] != '\0' ? g_settings_notice : "ready.");
+    settings_write_color_line(0x0, 0x7, line);
 }
 
 static void settings_begin_text_edit(int field, const char* title, const char* initial) {
@@ -1584,7 +1989,7 @@ static void settings_begin_text_edit(int field, const char* title, const char* i
     }
     console_clear();
     console_writeln("+==============================================================================+");
-    console_writeln(tr3("|                        Cyralith Settings / Bearbeiten                         |", "|                         Cyralith Settings / Editing                          |", "|                       Pengaturan Cyralith / Edit Nilai                       |"));
+    console_writeln(tr3("|                        Cyralith Kernelconfig / Bearbeiten                         |", "|                         Cyralith Kernelconfig / Editing                          |", "|                       Pengaturan Cyralith / Edit Nilai                       |"));
     console_writeln("+==============================================================================+");
     console_write(tr(" Feld: ", " Field: "));
     console_writeln(g_settings_edit_title);
@@ -1604,6 +2009,20 @@ static void settings_apply_text_value(void) {
     int ok = -1;
     if (g_settings_input[0] == '\0') {
         settings_set_notice("Leerer Wert wurde verworfen.", "Empty value was ignored.");
+        g_settings_edit_field = SETTINGS_EDIT_NONE;
+        settings_draw_list();
+        return;
+    }
+    if (g_settings_edit_field == SETTINGS_EDIT_SYSDO) {
+        ok = user_elevate(g_settings_input);
+        if (ok >= 0) {
+            g_settings_sysdo_session = 1;
+            settings_set_notice("System-Freigabe aktiv: Kernelconfig duerfen geaendert werden.", "System-Freigabe active: kernelconfig can be changed.");
+            log_action_simple("sysdo.settings", "unlock", ACTIONLOG_OK);
+        } else {
+            settings_set_notice("System-Freigabe fehlgeschlagen.", "System-Freigabe failed.");
+            log_action_simple("sysdo.settings", "unlock", ACTIONLOG_FAIL);
+        }
         g_settings_edit_field = SETTINGS_EDIT_NONE;
         settings_draw_list();
         return;
@@ -1636,6 +2055,10 @@ static void settings_activate_selected(void) {
             case SETTINGS_HOME_GENERAL: g_settings_view = SETTINGS_VIEW_GENERAL; g_settings_selected = 0; settings_draw_list(); return;
             case SETTINGS_HOME_NETWORK: g_settings_view = SETTINGS_VIEW_NETWORK; g_settings_selected = 0; settings_draw_list(); return;
             case SETTINGS_HOME_SECURITY: g_settings_view = SETTINGS_VIEW_SECURITY; g_settings_selected = 0; settings_draw_list(); return;
+            case SETTINGS_HOME_DISPLAY: g_settings_view = SETTINGS_VIEW_DISPLAY; g_settings_selected = 0; settings_draw_list(); return;
+            case SETTINGS_HOME_KERNEL: g_settings_view = SETTINGS_VIEW_KERNEL; g_settings_selected = 0; settings_draw_list(); return;
+            case SETTINGS_HOME_CCS: g_settings_view = SETTINGS_VIEW_CCS; g_settings_selected = 0; settings_draw_list(); return;
+            case SETTINGS_HOME_FS: g_settings_view = SETTINGS_VIEW_FS; g_settings_selected = 0; settings_draw_list(); return;
             case SETTINGS_HOME_EXPERT_MODE:
                 g_setting_expert_mode = g_setting_expert_mode == 0 ? 1 : 0;
                 settings_set_notice(g_setting_expert_mode != 0 ? "Expertenmodus aktiviert." : "Expertenmodus deaktiviert.", g_setting_expert_mode != 0 ? "Expert mode enabled." : "Expert mode disabled.");
@@ -1653,12 +2076,11 @@ static void settings_activate_selected(void) {
                 return;
             case SETTINGS_HOME_SAVE:
                 rc = save_system_state();
-                settings_set_notice(rc == 0 ? "Einstellungen gespeichert." : "Speichern fehlgeschlagen. Wahrscheinlich keine virtuelle Platte.", rc == 0 ? "Settings saved." : "Save failed. Probably no virtual disk attached.");
+                settings_set_notice(rc == 0 ? "Kernelconfig gespeichert." : "Speichern fehlgeschlagen. Wahrscheinlich keine virtuelle Platte.", rc == 0 ? "Kernelconfig saved." : "Save failed. Probably no virtual disk attached.");
                 settings_draw_list();
                 return;
             case SETTINGS_HOME_EXIT:
-                g_settings_active = 0;
-                console_clear();
+                settings_close(1);
                 return;
             default: return;
         }
@@ -1692,6 +2114,16 @@ static void settings_activate_selected(void) {
                 settings_set_notice("Start-Hinweise umgeschaltet.", "Startup hints switched.");
                 settings_draw_list();
                 return;
+            case SETTINGS_GENERAL_AUTOSAVE:
+                g_setting_autosave = g_setting_autosave == 0 ? 1 : 0;
+                settings_set_notice("Auto-Speichern umgeschaltet.", "Auto-save switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_GENERAL_VERBOSE_DIAG:
+                g_setting_verbose_diag = g_setting_verbose_diag == 0 ? 1 : 0;
+                settings_set_notice("Diagnose-Stufe umgeschaltet.", "Diagnostic level switched.");
+                settings_draw_list();
+                return;
             case SETTINGS_GENERAL_BACK:
                 settings_go_home();
                 return;
@@ -1715,6 +2147,182 @@ static void settings_activate_selected(void) {
                 settings_draw_list();
                 return;
             case SETTINGS_NETWORK_BACK: settings_go_home(); return;
+            default: return;
+        }
+    }
+
+    if (g_settings_view == SETTINGS_VIEW_DISPLAY) {
+        switch (g_settings_selected) {
+            case SETTINGS_DISPLAY_ENABLE:
+                cbdd_set_enabled(cbdd_is_enabled() == 0 ? 1 : 0);
+                settings_set_notice("Basic Display Driver umgeschaltet.", "Basic Display Driver switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_BACKEND:
+                cbdd_cycle_backend();
+                settings_set_notice("Anzeige-Backend umgeschaltet.", "Display backend switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_MODE:
+                cbdd_cycle_mode();
+                settings_set_notice("Anzeigemodus umgeschaltet.", "Display mode switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_CURSOR:
+                cbdd_toggle_cursor();
+                settings_set_notice("Cursor-Option umgeschaltet.", "Cursor option switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_CONTRAST:
+                cbdd_toggle_high_contrast();
+                settings_set_notice("Kontrast-Option umgeschaltet.", "Contrast option switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_DEBUG:
+                cbdd_toggle_debug_overlay();
+                settings_set_notice("Debug-Overlay umgeschaltet.", "Debug overlay switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_PROBE:
+                rc = cbdd_probe();
+                settings_set_notice(rc == 0 ? "CBDD-Probe erfolgreich: VGA/Textbasis bereit." : "CBDD-Probe fehlgeschlagen.", rc == 0 ? "CBDD probe successful: VGA/text base ready." : "CBDD probe failed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_RESET:
+                cbdd_reset_safe();
+                settings_set_notice("CBDD auf sicheren VGA-Textmodus gesetzt.", "CBDD reset to safe VGA text mode.");
+                settings_draw_list();
+                return;
+            case SETTINGS_DISPLAY_BACK:
+                settings_go_home();
+                return;
+            default: return;
+        }
+    }
+
+    if (g_settings_view == SETTINGS_VIEW_KERNEL) {
+        switch (g_settings_selected) {
+            case SETTINGS_KERNEL_SAFE_DEFAULTS:
+                ksettings_toggle(KSETTINGS_FLAG_SAFE_DEFAULTS);
+                settings_set_notice("Safe-Defaults umgeschaltet.", "Safe defaults switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_KERNEL_AUDIT:
+                ksettings_toggle(KSETTINGS_FLAG_AUDIT_LOG);
+                settings_set_notice("Audit-Log umgeschaltet.", "Audit log switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_KERNEL_RECOVERY:
+                ksettings_toggle(KSETTINGS_FLAG_RECOVERY_READY);
+                settings_set_notice("Recovery-Basis umgeschaltet.", "Recovery baseline switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_KERNEL_UPDATE_GUARD:
+                ksettings_toggle(KSETTINGS_FLAG_UPDATE_GUARD);
+                settings_set_notice("Update-Guard vorgemerkt/entfernt.", "Update guard reserved/removed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_KERNEL_SYSTEM_PATHS:
+                ksettings_toggle(KSETTINGS_FLAG_PROTECT_SYSTEM_PATHS);
+                settings_set_notice("Systempfad-Schutz umgeschaltet.", "System path protection switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_KERNEL_SYSDO_SINGLE:
+                ksettings_toggle(KSETTINGS_FLAG_SYSDO_SINGLE_COMMAND);
+                settings_set_notice("Systemrechte-Regel umgeschaltet.", "system rights rule switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_KERNEL_BACK:
+                settings_go_home();
+                return;
+            default: return;
+        }
+    }
+
+    if (g_settings_view == SETTINGS_VIEW_CCS) {
+        switch (g_settings_selected) {
+            case SETTINGS_CCS_PROFILE:
+                ccs_settings_cycle_profile();
+                settings_set_notice("CCS-Profil gewechselt.", "CCS profile changed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_CCS_APP_ISOLATION:
+                ccs_settings_toggle(CCS_SETTINGS_FLAG_APP_ISOLATION_PLAN);
+                settings_set_notice("App-Isolation vorgemerkt/entfernt.", "App isolation reserved/removed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_CCS_MIN_NETWORK:
+                ccs_settings_toggle(CCS_SETTINGS_FLAG_MINIMAL_NETWORK);
+                settings_set_notice("Netzwerk-Minimalregel umgeschaltet.", "Minimal network rule switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_CCS_SIGNED_SOURCES:
+                ccs_settings_toggle(CCS_SETTINGS_FLAG_SIGNED_SOURCES_PLAN);
+                settings_set_notice("Signierte Quellen vorgemerkt/entfernt.", "Signed sources reserved/removed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_CCS_ROLLBACK:
+                ccs_settings_toggle(CCS_SETTINGS_FLAG_ROLLBACK_PLAN);
+                settings_set_notice("Rollback-Modell vorgemerkt/entfernt.", "Rollback model reserved/removed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_CCS_PACKAGE_PATH:
+                ccs_settings_toggle(CCS_SETTINGS_FLAG_PRIMARY_PACKAGE_PATH);
+                settings_set_notice("Primaerer Paketpfad umgeschaltet.", "Primary package path switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_CCS_BACK:
+                settings_go_home();
+                return;
+            default: return;
+        }
+    }
+
+    if (g_settings_view == SETTINGS_VIEW_FS) {
+        switch (g_settings_selected) {
+            case SETTINGS_FS_PERSISTENCE:
+                ksettings_toggle(KSETTINGS_FLAG_FS_PERSISTENCE);
+                settings_set_notice("FS-Persistenz-Regel umgeschaltet.", "FS persistence rule switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_AUTOSAVE:
+                ksettings_toggle(KSETTINGS_FLAG_FS_AUTOSAVE);
+                settings_set_notice("FS-Autosave umgeschaltet.", "FS autosave switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_STRICT_PERMS:
+                ksettings_toggle(KSETTINGS_FLAG_FS_STRICT_PERMS);
+                settings_set_notice("FS-Rechtepruefung umgeschaltet.", "FS permission checking switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_SYSTEM_PATHS:
+                ksettings_toggle(KSETTINGS_FLAG_PROTECT_SYSTEM_PATHS);
+                settings_set_notice("Systempfad-Schutz im FS umgeschaltet.", "System path protection in FS switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_X32_CONSOLE:
+                ksettings_toggle(KSETTINGS_FLAG_FS_X32_CONSOLE);
+                settings_set_notice("x32 FS Console umgeschaltet.", "x32 FS Console switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_RECOVERY_SCAN:
+                ksettings_toggle(KSETTINGS_FLAG_FS_RECOVERY_SCAN);
+                settings_set_notice("FS-Recovery-Scan vorgemerkt/entfernt.", "FS recovery scan reserved/removed.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_SAVE_NOW:
+                rc = afs_save_persistent();
+                settings_set_notice(rc == 0 ? "CyralithFS gespeichert." : "CyralithFS konnte nicht gespeichert werden.", rc == 0 ? "CyralithFS saved." : "Could not save CyralithFS.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_LOAD_NOW:
+                rc = afs_load_persistent();
+                settings_set_notice(rc == 0 ? "CyralithFS geladen." : "CyralithFS konnte nicht geladen werden.", rc == 0 ? "CyralithFS loaded." : "Could not load CyralithFS.");
+                settings_draw_list();
+                return;
+            case SETTINGS_FS_BACK:
+                settings_go_home();
+                return;
             default: return;
         }
     }
@@ -1755,14 +2363,19 @@ static void settings_activate_selected(void) {
                 settings_set_notice("Treiber-Diagnose umgeschaltet.", "Driver diagnostics switched.");
                 settings_draw_list();
                 return;
-            case SETTINGS_EXPERT_AUTOSAVE:
-                g_setting_autosave = g_setting_autosave == 0 ? 1 : 0;
-                settings_set_notice("Auto-Speichern umgeschaltet.", "Auto-save switched.");
+            case SETTINGS_EXPERT_BOOT_SAFE:
+                g_setting_boot_safe = g_setting_boot_safe == 0 ? 1 : 0;
+                settings_set_notice("Boot-Safemode-Vormerkung umgeschaltet.", "Boot safemode reservation switched.");
                 settings_draw_list();
                 return;
-            case SETTINGS_EXPERT_VERBOSE_DIAG:
-                g_setting_verbose_diag = g_setting_verbose_diag == 0 ? 1 : 0;
-                settings_set_notice("Ausfuehrliche Diagnose umgeschaltet.", "Verbose diagnostics switched.");
+            case SETTINGS_EXPERT_PANIC_VERBOSE:
+                g_setting_panic_verbose = g_setting_panic_verbose == 0 ? 1 : 0;
+                settings_set_notice("Panic-Ausgabe umgeschaltet.", "Panic output switched.");
+                settings_draw_list();
+                return;
+            case SETTINGS_EXPERT_X32_CLI_STUB:
+                ksettings_toggle(KSETTINGS_FLAG_FS_X32_CONSOLE);
+                settings_set_notice("Desktop x32 FS Console umgeschaltet.", "Desktop x32 FS Console switched.");
                 settings_draw_list();
                 return;
             case SETTINGS_EXPERT_BACK:
@@ -1774,6 +2387,12 @@ static void settings_activate_selected(void) {
 }
 
 static void settings_open(void) {
+    if (g_kernelconfig_sysdo_gate == 0) {
+        console_set_color(0xF, 0x0);
+        console_writeln(tr("kernelconfig ist geschuetzt. Nutze: sysdo cyralith kernelconfig", "kernelconfig is protected. Use: sysdo cyralith kernelconfig"));
+        log_action_simple("kernelconfig", "blocked direct open", ACTIONLOG_WARN);
+        return;
+    }
     g_settings_active = 1;
     g_settings_view = SETTINGS_VIEW_HOME;
     g_settings_selected = 0;
@@ -1785,6 +2404,20 @@ static void settings_open(void) {
     g_settings_anim_idle = 0U;
     settings_set_notice("Bereit. Waehle einen Bereich aus.", "Ready. Pick a category.");
     settings_draw_list();
+}
+
+static void settings_close(int clear_screen) {
+    if (g_settings_sysdo_session != 0) {
+        user_drop();
+        g_settings_sysdo_session = 0;
+        log_action_simple("sysdo.settings", "auto-drop", ACTIONLOG_OK);
+    }
+    g_settings_active = 0;
+    g_settings_edit_field = SETTINGS_EDIT_NONE;
+    console_set_color(0xF, 0x0);
+    if (clear_screen != 0) {
+        console_clear();
+    }
 }
 
 static void settings_handle_key(int key) {
@@ -1821,10 +2454,18 @@ static void settings_handle_key(int key) {
     }
     if (key == KEY_CTRL_C || key == 'q' || key == 'Q') {
         if (g_settings_view == SETTINGS_VIEW_HOME) {
-            g_settings_active = 0;
-            console_clear();
+            settings_close(1);
         } else {
             settings_go_home();
+        }
+        return;
+    }
+    if (key == 'u' || key == 'U') {
+        if (user_is_master() != 0) {
+            settings_set_notice("System-Rechte sind bereits aktiv.", "System rights are already active.");
+            settings_draw_list();
+        } else {
+            settings_begin_text_edit(SETTINGS_EDIT_SYSDO, "System-Passwort", "");
         }
         return;
     }
@@ -1862,7 +2503,7 @@ static int needs_master(const char* action) {
     if (user_is_master() != 0) {
         return 0;
     }
-    console_write(tr("Dafuer brauchst du System-Rechte. Nutze 'elevate <passwort>': ", "You need system rights for that. Use 'elevate <password>': "));
+    console_write(tr("Dafuer brauchst du System-Rechte. Nutze 'sysdo <passwort> <befehl>' oder 'elevate <passwort>': ", "You need system rights for that. Use 'sysdo <password> <command>' or 'elevate <password>': "));
     console_writeln(action);
     return 1;
 }
@@ -1871,7 +2512,7 @@ static int needs_master(const char* action) {
 static void show_help_topic_unknown(const char* topic) {
     console_writeln(tr3("Unbekanntes Hilfe-Thema.", "Unknown help topic.", "Topik bantuan tidak dikenal."));
     console_write(tr3("Nutze: ", "Use: ", "Gunakan: "));
-    console_writeln("help network | files | users | apps | games | processes | system | settings | all");
+    console_writeln("help network | files | users | apps | games | processes | system | kernelconfig | all");
     if (topic != (const char*)0 && topic[0] != '\0') {
         console_write(tr3("Eingegeben: ", "Entered: ", "Yang dimasukkan: "));
         console_writeln(topic);
@@ -1931,6 +2572,8 @@ static void show_help_users(void) {
     console_writeln(tr3("  users                - Zeigt bekannte Benutzer und Gruppen.", "  users                - Shows known users and groups.", "  users                - Menampilkan pengguna dan grup yang dikenal."));
     console_writeln(tr3("  login <n> [pw]       - Meldet einen Benutzer an.", "  login <n> [pw]       - Signs in a user.", "  login <n> [pw]       - Masuk sebagai pengguna."));
     console_writeln(tr3("  elevate <pw>         - Aktiviert den System-Modus.", "  elevate <pw>         - Activates system mode.", "  elevate <pw>         - Mengaktifkan mode sistem."));
+    console_writeln(tr3("  sysdo <pw> <befehl>   - Fuehrt einen Befehl mit Systemrechten aus.", "  sysdo <pw> <command>  - Runs one command with system rights.", "  sysdo <pw> <cmd>      - Menjalankan satu perintah dengan hak sistem."));
+    console_writeln(tr3("  sysdo <pw> kernelconfig - Oeffnet Kernelconfig mit Auto-Drop.", "  sysdo <pw> kernelconfig - Opens kernelconfig with auto-drop.", "  sysdo <pw> kernelconfig - Membuka konfigurasi kernel dengan auto-drop."));
     console_writeln(tr3("  drop                 - Verlaesst den System-Modus.", "  drop                 - Leaves system mode.", "  drop                 - Keluar dari mode sistem."));
     console_writeln(tr3("  passwd <neu>         - Aendert dein eigenes Passwort.", "  passwd <new>         - Changes your own password.", "  passwd <new>         - Mengubah kata sandi sendiri."));
     console_writeln(tr3("  passwd <u> <neu>     - Aendert Passwoerter im System-Modus.", "  passwd <u> <new>     - Changes passwords in system mode.", "  passwd <u> <new>     - Mengubah kata sandi dalam mode sistem."));
@@ -1960,6 +2603,7 @@ static void show_help_games(void) {
     console_writeln(tr3("  snake                - Startet Snake direkt.", "  snake                - Starts Snake directly.", "  snake                - Menjalankan Snake secara langsung."));
     console_writeln(tr3("  game stats snake     - Zeigt Score, Highscore und Session-Daten.", "  game stats snake     - Shows score, high score, and session data.", "  game stats snake     - Menampilkan skor, high score, dan data sesi."));
     console_writeln(tr3("  app run snake        - Startet Snake als App.", "  app run snake        - Starts Snake as an app.", "  app run snake        - Menjalankan Snake sebagai aplikasi."));
+    console_writeln(tr3("  app run x32fs        - Startet die native FS-Konsole.", "  app run x32fs        - Starts the native FS console.", "  app run x32fs        - Menjalankan konsol FS native."));
 }
 
 static void show_help_processes(void) {
@@ -1998,13 +2642,16 @@ static void show_help_system(void) {
 }
 
 static void show_help_settings(void) {
-    console_writeln(tr3("Hilfe: Einstellungen und Bedienung", "Help: settings and navigation", "Bantuan: pengaturan dan navigasi"));
-    console_writeln(tr3("  settings             - Oeffnet die Einstellungszentrale.", "  settings             - Opens the settings center.", "  settings             - Membuka pusat pengaturan."));
-    console_writeln(tr3("  open settings        - Zweiter Weg in die Einstellungen.", "  open settings        - Second way into settings.", "  open settings        - Cara kedua masuk ke pengaturan."));
-    console_writeln(tr3("  settings general     - Springt direkt in Allgemein.", "  settings general     - Jumps directly to General.", "  settings general     - Langsung ke Umum."));
-    console_writeln(tr3("  settings network     - Springt direkt in Netzwerk.", "  settings network     - Jumps directly to Network.", "  settings network     - Langsung ke Jaringan."));
-    console_writeln(tr3("  settings security    - Springt direkt in Sicherheit.", "  settings security    - Jumps directly to Security.", "  settings security    - Langsung ke Keamanan."));
-    console_writeln(tr3("  settings expert      - Springt direkt in Expertenmodus.", "  settings expert      - Jumps directly to Expert mode.", "  settings expert      - Langsung ke mode pakar."));
+    console_writeln(tr3("Hilfe: Kernelconfig und Bedienung", "Help: kernelconfig and navigation", "Bantuan: pengaturan dan navigasi"));
+    console_writeln(tr3("  sysdo cyralith kernelconfig - Oeffnet die menuconfig-artige Kernelconfig.", "  sysdo cyralith kernelconfig - Opens the menuconfig-like kernel configuration.", "  kernelconfig         - Membuka konfigurasi kernel."));
+    console_writeln(tr3("  kernelconfig kernel  - Springt direkt zu Kernel-Schutzoptionen.", "  kernelconfig kernel  - Jumps directly to kernel protection options.", "  kernelconfig kernel  - Langsung ke opsi proteksi kernel."));
+    console_writeln(tr3("  kernelconfig ccs     - Springt direkt zum CCS-Profil.", "  kernelconfig ccs     - Jumps directly to the CCS profile.", "  kernelconfig ccs     - Langsung ke profil CCS."));
+    console_writeln(tr3("  sysdo <pw> kernelconfig - Bearbeiten ohne vorheriges elevate/drop.", "  sysdo <pw> kernelconfig - Edit without manual elevate/drop.", "  sysdo <pw> kernelconfig - Edit tanpa elevate/drop manual."));
+    console_writeln(tr3("  open kernelconfig    - blockiert; nutze sysdo.", "  open kernelconfig    - blocked; use sysdo.", "  open kernelconfig    - Cara kedua masuk ke kernelconfig."));
+    console_writeln(tr3("  kernelconfig general - Springt direkt in Allgemein.", "  kernelconfig general - Jumps directly to General.", "  kernelconfig general - Langsung ke Umum."));
+    console_writeln(tr3("  kernelconfig network - Springt direkt in Netzwerk.", "  kernelconfig network - Jumps directly to Network.", "  kernelconfig network - Langsung ke Jaringan."));
+    console_writeln(tr3("  kernelconfig security- Springt direkt in Sicherheit.", "  kernelconfig security- Jumps directly to Security.", "  kernelconfig security- Langsung ke Keamanan."));
+    console_writeln(tr3("  kernelconfig expert  - Springt direkt in Expertenmodus.", "  kernelconfig expert  - Jumps directly to Expert mode.", "  kernelconfig expert  - Langsung ke mode pakar."));
     console_writeln(tr3("  Pfeil hoch/runter    - Waehlt einen Eintrag.", "  Up/Down arrows       - Select an entry.", "  Panah atas/bawah     - Memilih satu entri."));
     console_writeln(tr3("  Enter                - Aendert oder oeffnet den Eintrag.", "  Enter                - Changes or opens the entry.", "  Enter                - Mengubah atau membuka entri."));
     console_writeln(tr3("  q oder Ctrl+C        - Geht zurueck.", "  q or Ctrl+C          - Goes back.", "  q atau Ctrl+C        - Kembali."));
@@ -2020,7 +2667,7 @@ static void show_help_overview(void) {
     console_writeln(tr3("  help games           - Zeigt Spiele und schnelle Unterhaltung.", "  help games           - Shows games and quick fun.", "  help games           - Menampilkan game dan hiburan singkat."));
     console_writeln(tr3("  help processes       - Zeigt tasks, jobs und proc.", "  help processes       - Shows tasks, jobs and proc.", "  help processes       - Menampilkan tasks, jobs, dan proc."));
     console_writeln(tr3("  help system          - Zeigt Status, Reliability und Diagnose.", "  help system          - Shows status, reliability and diagnostics.", "  help system          - Menampilkan status, reliability, dan diagnosis."));
-    console_writeln(tr3("  help settings        - Zeigt Einstellungen und Steuerung.", "  help settings        - Shows settings and navigation.", "  help settings        - Menampilkan pengaturan dan navigasi."));
+    console_writeln(tr3("  help kernelconfig    - Zeigt Kernelconfig und Steuerung.", "  help kernelconfig    - Shows kernelconfig and navigation.", "  help kernelconfig    - Menampilkan kernelconfig dan navigasi."));
     console_writeln(tr3("  help all             - Zeigt weiterhin die komplette Liste.", "  help all             - Still shows the complete list.", "  help all             - Tetap menampilkan daftar lengkap."));
     console_writeln("");
     console_writeln(tr3("Tipps:", "Tips:", "Tips:"));
@@ -2042,7 +2689,7 @@ static void command_help(const char* args) {
     if (kstrcmp(topic, "games") == 0 || kstrcmp(topic, "game") == 0 || kstrcmp(topic, "spiele") == 0 || kstrcmp(topic, "snake") == 0) { show_help_games(); return; }
     if (kstrcmp(topic, "processes") == 0 || kstrcmp(topic, "process") == 0 || kstrcmp(topic, "proc") == 0 || kstrcmp(topic, "jobs") == 0 || kstrcmp(topic, "tasks") == 0 || kstrcmp(topic, "prozesse") == 0) { show_help_processes(); return; }
     if (kstrcmp(topic, "system") == 0 || kstrcmp(topic, "diagnose") == 0 || kstrcmp(topic, "status") == 0) { show_help_system(); return; }
-    if (kstrcmp(topic, "settings") == 0 || kstrcmp(topic, "einstellungen") == 0 || kstrcmp(topic, "prefs") == 0) { show_help_settings(); return; }
+    if (kstrcmp(topic, "kernelconfig") == 0 || kstrcmp(topic, "settings") == 0 || kstrcmp(topic, "einstellungen") == 0 || kstrcmp(topic, "prefs") == 0) { show_help_settings(); return; }
     if (kstrcmp(topic, "all") == 0 || kstrcmp(topic, "alles") == 0 || kstrcmp(topic, "full") == 0) { show_help_all(); return; }
     show_help_topic_unknown(topic);
 }
@@ -2065,11 +2712,12 @@ static void show_help_all(void) {
     console_writeln(tr3("  keytest              - Zeigt rohe Tastenwerte fuer Layout-Tests.", "  keytest              - Shows raw key values for layout tests.", "  keytest              - Menampilkan nilai tombol mentah untuk tes layout."));
     console_writeln(tr3("  layout <de|us>       - Stellt das Cyralith-Tastaturlayout um.", "  layout <de|us>       - Changes the Cyralith keyboard layout.", "  layout <de|us>       - Mengubah layout keyboard Cyralith."));
     console_writeln(tr3("  calc <a> <op> <b>    - Rechnet direkt in der Shell.", "  calc <a> <op> <b>    - Calculates directly in the shell.", "  calc <a> <op> <b>    - Menghitung langsung di shell."));
-    console_writeln(tr("  settings             - Oeffnet die neue Einstellungszentrale mit Kategorien und Expertenmodus.", "  settings             - Opens the new settings center with categories and expert mode."));
+    console_writeln(tr("  kernelconfig         - Oeffnet die menuconfig-artige Kernel/System-Konfiguration.", "  kernelconfig         - Opens the menuconfig-like kernel/system configuration."));
     console_writeln(tr("  whoami               - Zeigt Benutzername, Rolle und Home-Ordner.", "  whoami               - Shows user, role and home folder."));
     console_writeln(tr("  users                - Zeigt bekannte Benutzer, Gruppen und den System-Modus.", "  users                - Shows known users, groups and system mode."));
     console_writeln(tr("  login <n> [pw]       - Meldet einen normalen Benutzer an.", "  login <n> [pw]       - Signs in a regular user."));
     console_writeln(tr("  elevate <pw>         - Aktiviert den root-aehnlichen System-Modus.", "  elevate <pw>         - Activates the root-like system mode."));
+    console_writeln(tr("  sysdo <pw> <befehl>   - Fuehrt einen einzelnen Befehl mit Systemrechten aus.", "  sysdo <pw> <command>  - Runs one command with system rights."));
     console_writeln(tr("  drop                 - Schaltet den System-Modus wieder aus.", "  drop                 - Turns system mode off again."));
     console_writeln(tr("  passwd <neu>         - Aendert dein Passwort.", "  passwd <new>         - Changes your password."));
     console_writeln(tr("  passwd <u> <neu>     - Aendert ein Passwort im System-Modus.", "  passwd <u> <new>     - Changes a password in system mode."));
@@ -2094,7 +2742,7 @@ static void show_help_all(void) {
     console_writeln(tr("  loadfs               - Laedt Dateien, Nutzer, Netzwerk und Apps von der virtuellen ATA-Platte.", "  loadfs               - Reloads files, users, network and apps from the virtual ATA disk."));
     console_writeln(tr("  disk                 - Zeigt, ob eine Platte fuer Persistenz gefunden wurde.", "  disk                 - Shows whether a disk for persistence was found."));
     console_writeln(tr("  network              - Zeigt Netzwerk-Status und Konfiguration.", "  network              - Shows network status and configuration."));
-    console_writeln(tr("  open settings        - Zweiter Weg in die Einstellungen.", "  open settings        - Second way to open settings."));
+    console_writeln(tr("  open kernelconfig    - blockiert; nutze sysdo.", "  open kernelconfig    - Second way to open kernelconfig."));
     console_writeln(tr("  network              - Zeigt Netzwerk-Status und aktive Werte.", "  network              - Shows network status and active values."));
     console_writeln(tr("  ip [set <addr>]      - Zeigt oder setzt die IPv4-Adresse (System-Modus).", "  ip [set <addr>]      - Shows or sets the IPv4 address (system mode)."));
     console_writeln(tr("  netprobe             - Sendet einen kleinen Rohdaten-Test.", "  netprobe             - Sends a small raw packet test."));
@@ -2144,8 +2792,8 @@ static void show_help_all(void) {
     console_writeln(tr("  proc resume <pid>    - Setzt einen Prozess fort.", "  proc resume <pid>    - Resumes a process."));
     console_writeln(tr("  proc kill <pid>      - Beendet einen Prozess.", "  proc kill <pid>      - Kills a process."));
     console_writeln(tr("  reboot               - Startet Cyralith neu.", "  reboot               - Restarts Cyralith."));
-    console_writeln(tr("  open <ziel>          - Oeffnet settings, desktop, network, files oder monitor.", "  open <target>        - Opens settings, desktop, network, files or monitor."));
-    console_writeln(tr("  app run settings     - Startet die Settings-App.", "  app run settings     - Starts the settings app."));
+    console_writeln(tr("  open <ziel>          - Oeffnet kernelconfig, desktop, network, files oder monitor.", "  open <target>        - Opens kernelconfig, desktop, network, files or monitor."));
+    console_writeln(tr("  app run kernelconfig - Startet die Kernelconfig-App.", "  app run kernelconfig - Starts the kernelconfig app."));
     console_writeln(tr3("  snake                - Startet das eingebaute Snake-Spiel.", "  snake                - Starts the built-in Snake game.", "  snake                - Menjalankan game Snake bawaan."));
     console_writeln(tr("  version              - Zeigt die Build-Version.", "  version              - Shows the build version."));
     console_writeln(tr("  about                - Erklaert kurz, was Cyralith werden soll.", "  about                - Briefly explains what Cyralith should become."));
@@ -2164,19 +2812,19 @@ static void show_help_all(void) {
 static void show_about(void) {
     console_writeln(tr("Cyralith ist ein eigenes, noch junges Betriebssystem.", "Cyralith is its own young operating system."));
     console_writeln(tr("Die Idee: leicht zu bedienen wie Windows und anpassbar wie Linux.", "The idea: easy to use like Windows and customizable like Linux."));
-    console_writeln(tr("Aktuell gibt es eine stabile Shell, Nutzer- und Rechte-Persistenz, CyralithFS mit cp/mv/find, erste Platten-Speicherung, PCI-Netzwerkerkennung, einen Intel-Kompatibilitaetsmodus und einen e1000-Pilottreiber, ein kleines App-Modell, Paging-Grundlagen, ein kooperatives Prozessmodell, eine groessere Settings-Zentrale mit Kategorien und Expertenmodus, eigene Skript-Befehle, sichere externe Programme mit Manifesten und Lumen.", "Right now it has a stable shell, persistent users and rights, CyralithFS with cp/mv/find, first disk persistence, PCI network detection, an e1000 pilot driver, a small app model, paging foundations, a cooperative process model, a larger categorized settings center with expert mode, custom script commands and Lumen."));
-    console_writeln(tr("Lumen ist jetzt optisch an klassische Terminal-Editoren wie nano angelehnt. Die Settings-App erinnert an menueartige Kernel-Tools, ist aber bewusst leichter verstaendlich. Externe Programme laufen in einer einfachen Sandbox mit Rechten und Vertrauensstufen.", "Lumen is now visually inspired by classic terminal editors like nano."));
+    console_writeln(tr("Aktuell gibt es eine stabile Shell, Nutzer- und Rechte-Persistenz, CyralithFS mit cp/mv/find, erste Platten-Speicherung, PCI-Netzwerkerkennung, einen Intel-Kompatibilitaetsmodus und einen e1000-Pilottreiber, ein kleines App-Modell, Paging-Grundlagen, ein kooperatives Prozessmodell, eine groessere Kernelconfig-Zentrale mit Kategorien und Expertenmodus, eigene Skript-Befehle, sichere externe Programme mit Manifesten und Lumen.", "Right now it has a stable shell, persistent users and rights, CyralithFS with cp/mv/find, first disk persistence, PCI network detection, an e1000 pilot driver, a small app model, paging foundations, a cooperative process model, a larger menuconfig-like kernelconfig center with expert mode, custom script commands and Lumen."));
+    console_writeln(tr("Lumen ist jetzt optisch an klassische Terminal-Editoren wie nano angelehnt. Die Kernelconfig-App erinnert an menueartige Kernel-Tools, ist aber bewusst leichter verstaendlich. Externe Programme laufen in einer einfachen Sandbox mit Rechten und Vertrauensstufen.", "Lumen is now visually inspired by classic terminal editors like nano."));
     console_writeln(tr("Der System-Modus ist root-aehnlich: kein normaler Nutzer, sondern eine Rechte-Erweiterung.", "System mode is root-like: not a normal user, but a privilege elevation."));
     console_writeln(tr("Programmiert von Obsidian.", "Programmiert von Obsidian."));
 }
 
 static void open_target(const char* target) {
-    if (kstrcmp(target, "settings") == 0) {
+    if (kstrcmp(target, "kernelconfig") == 0 || kstrcmp(target, "settings") == 0) {
         settings_open();
         return;
     }
     if (kstrcmp(target, "desktop") == 0) {
-        console_writeln(tr("Desktop-Platzhalter geoeffnet.", "Desktop placeholder opened."));
+        desktop_open();
         return;
     }
     if (kstrcmp(target, "network") == 0) {
@@ -2191,7 +2839,7 @@ static void open_target(const char* target) {
         print_status();
         return;
     }
-    console_writeln(tr("Nutze: open <settings|desktop|network|files|monitor>", "Use: open <settings|desktop|network|files|monitor>"));
+    console_writeln(tr("Nutze: open <kernelconfig|desktop|network|files|monitor>", "Use: open <kernelconfig|desktop|network|files|monitor>"));
 }
 
 static void history_store(const char* cmd) {
@@ -2529,7 +3177,7 @@ static int program_guard_command(const char* cmd) {
     if (kstrcmp(first, "help") == 0 || kstrcmp(first, "quickstart") == 0 || kstrcmp(first, "status") == 0 ||
         kstrcmp(first, "history") == 0 || kstrcmp(first, "whoami") == 0 || kstrcmp(first, "users") == 0 ||
         kstrcmp(first, "version") == 0 || kstrcmp(first, "about") == 0 || kstrcmp(first, "diag") == 0 ||
-        kstrcmp(first, "settings") == 0 ||
+        kstrcmp(first, "kernelconfig") == 0 ||
         kstrcmp(first, "pwd") == 0 || kstrcmp(first, "fs") == 0 || kstrcmp(first, "network") == 0 ||
         kstrcmp(first, "nic") == 0 || kstrcmp(first, "mac") == 0 || kstrcmp(first, "echo") == 0 ||
         kstrcmp(first, "clear") == 0 || kstrcmp(first, "ai") == 0 || kstrcmp(first, "which") == 0) {
@@ -2603,7 +3251,7 @@ static int program_guard_command(const char* cmd) {
     }
     if (kstrcmp(first, "savefs") == 0 || kstrcmp(first, "loadfs") == 0 || kstrcmp(first, "disk") == 0 ||
         kstrcmp(first, "protect") == 0 || kstrcmp(first, "chmod") == 0 || kstrcmp(first, "owner") == 0 || kstrcmp(first, "chown") == 0 ||
-        kstrcmp(first, "login") == 0 || kstrcmp(first, "passwd") == 0 || kstrcmp(first, "elevate") == 0 || kstrcmp(first, "drop") == 0 ||
+        kstrcmp(first, "login") == 0 || kstrcmp(first, "passwd") == 0 || kstrcmp(first, "elevate") == 0 || kstrcmp(first, "sysdo") == 0 || kstrcmp(first, "drop") == 0 ||
         kstrcmp(first, "start") == 0 || kstrcmp(first, "stop") == 0 || kstrcmp(first, "reboot") == 0 || kstrcmp(first, "restart") == 0 ||
         kstrcmp(first, "cmd") == 0 || kstrcmp(first, "prog") == 0 || kstrcmp(first, "alloc") == 0) {
         if (program_has_cap(EXTPROG_CAP_SYSTEM) != 0) {
@@ -2775,7 +3423,7 @@ static int try_custom_command(const char* cmd) {
     }
     if (extprog_load(name, &manifest) == 0) {
         if (g_setting_require_program_approval != 0 && manifest.approved == 0U) {
-            console_writeln(tr("Programm ist noch nicht freigegeben. Nutze 'prog approve <name>' oder lockere die Regel in Settings > Sicherheit.", "Program is not approved yet. Use 'prog approve <name>' or relax the rule in Settings > Security."));
+            console_writeln(tr("Programm ist noch nicht freigegeben. Nutze 'prog approve <name>' oder lockere die Regel in Kernelconfig > Sicherheit.", "Program is not approved yet. Use 'prog approve <name>' or relax the rule in Kernelconfig > Security."));
             return 1;
         }
         program_context_enter(name, manifest.caps, manifest.trust);
@@ -2784,7 +3432,7 @@ static int try_custom_command(const char* cmd) {
         return 1;
     }
     if (g_setting_allow_legacy_commands == 0) {
-        console_writeln(tr("Legacy-Befehle ohne Manifest sind gesperrt. Nutze Settings > Sicherheit.", "Legacy commands without a manifest are blocked. Use Settings > Security."));
+        console_writeln(tr("Legacy-Befehle ohne Manifest sind gesperrt. Nutze Kernelconfig > Sicherheit.", "Legacy commands without a manifest are blocked. Use Kernelconfig > Security."));
         return 1;
     }
     {
@@ -2877,7 +3525,7 @@ static void command_cmd(const char* args) {
         }
         if (extprog_load(name, &manifest) == 0) {
             if (g_setting_require_program_approval != 0 && manifest.approved == 0U) {
-                console_writeln(tr("Programm ist noch nicht freigegeben. Nutze 'prog approve <name>' oder lockere die Regel in Settings > Sicherheit.", "Program is not approved yet. Use 'prog approve <name>' or relax the rule in Settings > Security."));
+                console_writeln(tr("Programm ist noch nicht freigegeben. Nutze 'prog approve <name>' oder lockere die Regel in Kernelconfig > Sicherheit.", "Program is not approved yet. Use 'prog approve <name>' or relax the rule in Kernelconfig > Security."));
                 return;
             }
             program_context_enter(name, manifest.caps, manifest.trust);
@@ -2886,7 +3534,7 @@ static void command_cmd(const char* args) {
             return;
         }
         if (g_setting_allow_legacy_commands == 0) {
-            console_writeln(tr("Legacy-Befehle ohne Manifest sind gesperrt. Nutze Settings > Sicherheit.", "Legacy commands without a manifest are blocked. Use Settings > Security."));
+            console_writeln(tr("Legacy-Befehle ohne Manifest sind gesperrt. Nutze Kernelconfig > Sicherheit.", "Legacy commands without a manifest are blocked. Use Kernelconfig > Security."));
             return;
         }
         {
@@ -3003,7 +3651,7 @@ static void command_prog(const char* args) {
             return;
         }
         if (g_setting_require_program_approval != 0 && manifest.approved == 0U) {
-            console_writeln(tr("Programm ist noch nicht freigegeben. Nutze 'prog approve <name>' oder lockere die Regel in Settings > Sicherheit.", "Program is not approved yet. Use 'prog approve <name>' or relax the rule in Settings > Security."));
+            console_writeln(tr("Programm ist noch nicht freigegeben. Nutze 'prog approve <name>' oder lockere die Regel in Kernelconfig > Sicherheit.", "Program is not approved yet. Use 'prog approve <name>' or relax the rule in Kernelconfig > Security."));
             return;
         }
         {
@@ -3330,6 +3978,10 @@ static void print_diag(void) {
     console_writeln(network_mac_address());
     console_write(tr("  Apps installiert: ", "  Installed apps: "));
     { uint32_t installed = 0U; size_t i; for (i = 0U; i < app_count(); ++i) { const app_t* app = app_get(i); if (app != (const app_t*)0 && app->installed != 0U) { installed++; } } console_write_dec(installed); console_putc('\n'); }
+    console_write("  CCS: ");
+    console_writeln(ccs_settings_profile_name());
+    console_write(tr("  Kernel-Schutz: ", "  Kernel protection: "));
+    console_writeln(ksettings_flag(KSETTINGS_FLAG_SAFE_DEFAULTS) != 0 ? tr("safe defaults", "safe defaults") : tr("gelockert", "relaxed"));
 }
 
 
@@ -3341,7 +3993,9 @@ static int save_system_state(void) {
     int arcade_ok = arcade_save_persistent();
     int recovery_ok = recovery_save_persistent();
     int log_ok = syslog_save_persistent();
-    return (afs_ok == AFS_OK && user_ok == 0 && net_ok == 0 && app_ok == 0 && arcade_ok == 0 && recovery_ok == 0 && log_ok == 0) ? 0 : -1;
+    int display_ok = cbdd_save_persistent();
+    int ksettings_ok = ksettings_save_persistent();
+    return (afs_ok == AFS_OK && user_ok == 0 && net_ok == 0 && app_ok == 0 && arcade_ok == 0 && recovery_ok == 0 && log_ok == 0 && display_ok == 0 && ksettings_ok == 0) ? 0 : -1;
 }
 
 static int load_system_state(void) {
@@ -3352,7 +4006,9 @@ static int load_system_state(void) {
     int arcade_ok = arcade_load_persistent();
     int recovery_ok = recovery_load_persistent();
     int log_ok = syslog_load_persistent();
-    return (afs_ok == AFS_OK && user_ok == 0 && net_ok == 0 && app_ok == 0 && arcade_ok == 0 && recovery_ok == 0 && log_ok == 0) ? 0 : -1;
+    int display_ok = cbdd_load_persistent();
+    int ksettings_ok = ksettings_load_persistent();
+    return (afs_ok == AFS_OK && user_ok == 0 && net_ok == 0 && app_ok == 0 && arcade_ok == 0 && recovery_ok == 0 && log_ok == 0 && display_ok == 0 && ksettings_ok == 0) ? 0 : -1;
 }
 
 static void __attribute__((unused)) command_hostname(const char* args) {
@@ -3468,7 +4124,7 @@ static void command_netup(void) {
         return;
     }
     if (rc == 2) {
-        console_writeln(tr3("Es laeuft schon ein anderer Netzwerktreiber. Wechsle ihn in Settings > Netzwerk oder mit 'netdriver'.", "Another network driver is already running. Switch it in Settings > Network or with 'netdriver'.", "Driver jaringan lain sudah aktif. Ganti di Settings > Network atau dengan 'netdriver'."));
+        console_writeln(tr3("Es laeuft schon ein anderer Netzwerktreiber. Wechsle ihn in Kernelconfig > Netzwerk oder mit 'netdriver'.", "Another network driver is already running. Switch it in Kernelconfig > Network or with 'netdriver'.", "Driver jaringan lain sudah aktif. Ganti di Kernelconfig > Network atau dengan 'netdriver'."));
         return;
     }
     if (rc == -1) {
@@ -3549,6 +4205,8 @@ static void command_mac(void) {
 
 static void app_run_target(const char* name) {
     unsigned int pid;
+    if (kstrcmp(name, "settings") == 0) { name = "kernelconfig"; }
+    if (kstrcmp(name, "fsconsole") == 0) { name = "x32fs"; }
     if (app_is_installed(name) == 0) {
         console_writeln(tr("Diese App ist gerade nicht installiert.", "That app is not installed right now."));
         return;
@@ -3564,8 +4222,13 @@ static void app_run_target(const char* name) {
         process_session_finish(pid, 0);
         return;
     }
-    if (kstrcmp(name, "settings") == 0) {
-        open_target("settings");
+    if (kstrcmp(name, "kernelconfig") == 0) {
+        open_target("kernelconfig");
+        process_session_finish(pid, 0);
+        return;
+    }
+    if (kstrcmp(name, "x32fs") == 0) {
+        x32fs_console_open();
         process_session_finish(pid, 0);
         return;
     }
@@ -4071,6 +4734,67 @@ static void command_proc(const char* args) {
     console_writeln(tr("Nutze: proc <list|spawn|info|stop|resume|kill>", "Use: proc <list|spawn|info|stop|resume|kill>"));
 }
 
+
+static void command_sysdo(const char* args) {
+    char password[32];
+    const char* rest;
+    size_t i = 0U;
+    int was_master;
+    int rc;
+
+    while (*args == ' ') {
+        args++;
+    }
+    if (*args == '\0') {
+        console_writeln(tr("Nutze: sysdo <passwort> <befehl>  |  Beispiel: sysdo cyralith kernelconfig", "Use: sysdo <password> <command>  |  Example: sysdo cyralith kernelconfig"));
+        console_writeln(tr("In Kernelconfig kannst du auch U druecken und das Passwort eingeben.", "Inside Kernelconfig you can also press U and enter the password."));
+        return;
+    }
+    while (args[i] != '\0' && args[i] != ' ' && i + 1U < sizeof(password)) {
+        password[i] = args[i];
+        i++;
+    }
+    password[i] = '\0';
+    rest = args + i;
+    while (*rest == ' ') {
+        rest++;
+    }
+    if (*rest == '\0') {
+        console_writeln(tr("Nutze: sysdo <passwort> <befehl>", "Use: sysdo <password> <command>"));
+        return;
+    }
+
+    was_master = user_is_master();
+    if (was_master == 0) {
+        rc = user_elevate(password);
+        if (rc < 0) {
+            console_writeln(tr("sysdo: Passwort falsch oder System-Modus nicht verfuegbar.", "sysdo: wrong password or system mode unavailable."));
+            log_action_simple("sysdo", "auth failed", ACTIONLOG_FAIL);
+            return;
+        }
+    }
+
+    if (kstrcmp(rest, "kernelconfig") == 0 || kstarts_with(rest, "kernelconfig ") || kstrcmp(rest, "settings") == 0 || kstarts_with(rest, "settings ")) {
+        g_kernelconfig_sysdo_gate = 1;
+        run_command(rest);
+        g_kernelconfig_sysdo_gate = 0;
+        if (was_master == 0 && g_settings_active != 0) {
+            g_settings_sysdo_session = 1;
+            settings_set_notice("System-Kernelconfig-Sitzung aktiv. Beim Schliessen wird automatisch gedroppt.", "kernelconfig session active. Closing will auto-drop rights.");
+            settings_draw_list();
+            log_action_simple("sysdo", "settings session", ACTIONLOG_OK);
+            return;
+        }
+    } else {
+        run_command(rest);
+    }
+
+    if (was_master == 0) {
+        user_drop();
+    }
+    log_action_simple("sysdo", "single command", ACTIONLOG_OK);
+}
+
 static void run_command(const char* cmd) {
     if (program_guard_command(cmd) == 0) { return; }
     if (kstrcmp(cmd, "help") == 0) { show_help_overview(); return; }
@@ -4104,11 +4828,17 @@ static void run_command(const char* cmd) {
     if (kstarts_with(cmd, "todo ")) { command_todo(cmd + 5); return; }
     if (kstarts_with(cmd, "calc ")) { command_calc(cmd + 5); return; }
     if (kstrcmp(cmd, "fs") == 0 || kstrcmp(cmd, "filesystem") == 0) { print_fs(); return; }
-    if (kstrcmp(cmd, "settings") == 0 || kstrcmp(cmd, "preferences") == 0) { settings_open(); return; }
-    if (kstrcmp(cmd, "settings general") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_GENERAL; settings_draw_list(); return; }
-    if (kstrcmp(cmd, "settings network") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_NETWORK; settings_draw_list(); return; }
-    if (kstrcmp(cmd, "settings security") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_SECURITY; settings_draw_list(); return; }
-    if (kstrcmp(cmd, "settings expert") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_EXPERT; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig") == 0 || kstrcmp(cmd, "kconfig") == 0 || kstrcmp(cmd, "preferences") == 0) { settings_open(); return; }
+    if (kstrcmp(cmd, "settings") == 0) { console_writeln("Hinweis: 'settings' heisst jetzt 'kernelconfig'."); settings_open(); return; }
+    if (kstrcmp(cmd, "kernelconfig general") == 0 || kstrcmp(cmd, "settings general") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_GENERAL; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig network") == 0 || kstrcmp(cmd, "settings network") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_NETWORK; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig security") == 0 || kstrcmp(cmd, "settings security") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_SECURITY; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig display") == 0 || kstrcmp(cmd, "kernelconfig cbdd") == 0 || kstrcmp(cmd, "settings display") == 0 || kstrcmp(cmd, "settings cbdd") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_DISPLAY; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig kernel") == 0 || kstrcmp(cmd, "settings kernel") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_KERNEL; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig ccs") == 0 || kstrcmp(cmd, "settings ccs") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_CCS; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig fs") == 0 || kstrcmp(cmd, "kernelconfig cyralithfs") == 0 || kstrcmp(cmd, "settings fs") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_FS; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "kernelconfig expert") == 0 || kstrcmp(cmd, "settings expert") == 0) { settings_open(); g_settings_view = SETTINGS_VIEW_EXPERT; settings_draw_list(); return; }
+    if (kstrcmp(cmd, "x32fs") == 0 || kstrcmp(cmd, "fsconsole") == 0) { x32fs_console_open(); return; }
     if (kstrcmp(cmd, "network") == 0 || kstrcmp(cmd, "net") == 0) { print_network_status(); return; }
     if (kstrcmp(cmd, "netdrivers") == 0) { command_netdrivers(); return; }
     if (kstrcmp(cmd, "games") == 0 || kstrcmp(cmd, "arcade") == 0) { command_games(); return; }
@@ -4122,6 +4852,7 @@ static void run_command(const char* cmd) {
     if (kstrcmp(cmd, "netprobe") == 0) { command_netprobe(); return; }
     if (kstrcmp(cmd, "mac") == 0) { command_mac(); return; }
     if (kstrcmp(cmd, "diag") == 0) { print_diag(); return; }
+    if (kstrcmp(cmd, "display") == 0 || kstrcmp(cmd, "cbdd") == 0) { command_display(); return; }
     if (kstrcmp(cmd, "doctor") == 0) { command_doctor(); return; }
     if (kstrcmp(cmd, "recover") == 0) { command_recover(); return; }
     if (kstrcmp(cmd, "panic") == 0) { command_panic(""); return; }
@@ -4156,6 +4887,8 @@ static void run_command(const char* cmd) {
     if (kstrcmp(cmd, "ls") == 0) { afs_ls(""); return; }
     if (kstrcmp(cmd, "reboot") == 0 || kstrcmp(cmd, "restart") == 0) { shell_reboot(); return; }
     if (kstrcmp(cmd, "shutdown") == 0 || kstrcmp(cmd, "poweroff") == 0 || kstrcmp(cmd, "halt") == 0) { shell_shutdown(); return; }
+    if (kstrcmp(cmd, "sysdo") == 0) { command_sysdo(""); return; }
+    if (kstarts_with(cmd, "sysdo ")) { command_sysdo(cmd + 5); return; }
     if (kstarts_with(cmd, "elevate")) {
         const char* pass = cmd + 7;
         while (*pass == ' ') { pass++; }
@@ -4320,8 +5053,12 @@ static void run_command(const char* cmd) {
         console_writeln(tr("Nicht direkt erkannt. Ich versuche die AI-Hilfe ...", "Not recognized directly. I will try AI help ..."));
         ai_route(cmd);
     } else {
-        console_writeln(tr("Nicht direkt erkannt. Tipp: Nutze 'help' oder 'settings'.", "Not recognized directly. Tip: use 'help' or 'settings'."));
+        console_writeln(tr("Nicht direkt erkannt. Tipp: Nutze 'help' oder 'sysdo cyralith kernelconfig'.", "Not recognized directly. Tip: use 'help' or 'sysdo cyralith kernelconfig'."));
     }
+}
+
+void shell_run_command(const char* cmd) {
+    run_command(cmd);
 }
 
 void shell_init(void) {
@@ -4339,6 +5076,14 @@ void shell_init(void) {
 }
 
 void shell_poll(void) {
+    if (x32fs_console_is_active() != 0) {
+        x32fs_console_poll();
+        return;
+    }
+    if (desktop_is_active() != 0) {
+        desktop_poll();
+        return;
+    }
     if (snake_is_active() != 0) {
         snake_poll();
         return;
@@ -4361,6 +5106,22 @@ void shell_handle_key(int key) {
     if (editor_is_active() != 0) {
         editor_handle_key(key);
         if (editor_is_active() == 0) {
+            prompt();
+        }
+        return;
+    }
+
+    if (x32fs_console_is_active() != 0) {
+        x32fs_console_handle_key(key);
+        if (x32fs_console_is_active() == 0) {
+            prompt();
+        }
+        return;
+    }
+
+    if (desktop_is_active() != 0) {
+        desktop_handle_key(key);
+        if (desktop_is_active() == 0 && snake_is_active() == 0 && editor_is_active() == 0 && g_settings_active == 0) {
             prompt();
         }
         return;

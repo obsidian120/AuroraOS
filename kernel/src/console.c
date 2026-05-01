@@ -7,6 +7,7 @@ static const size_t HISTORY_LINES = 512;
 static const size_t SCROLL_STEP = 20;
 
 static char history[512][80];
+static uint8_t history_color[512][80];
 static size_t history_line = 0;
 static size_t history_col = 0;
 static size_t history_used = 1;
@@ -17,13 +18,14 @@ static uint16_t vga_entry(unsigned char ch, uint8_t c) {
     return (uint16_t)ch | ((uint16_t)c << 8);
 }
 
-static void vga_put_at(size_t x, size_t y, char ch) {
-    VGA_MEMORY[y * VGA_WIDTH + x] = vga_entry((unsigned char)ch, color);
+static void vga_put_at(size_t x, size_t y, char ch, uint8_t c) {
+    VGA_MEMORY[y * VGA_WIDTH + x] = vga_entry((unsigned char)ch, c);
 }
 
 static void clear_history_line(size_t line) {
     for (size_t x = 0; x < VGA_WIDTH; ++x) {
         history[line][x] = ' ';
+        history_color[line][x] = color;
     }
 }
 
@@ -39,10 +41,12 @@ static void render(void) {
         size_t line_index = viewport_top + y;
         for (size_t x = 0; x < VGA_WIDTH; ++x) {
             char ch = ' ';
+            uint8_t c = color;
             if (line_index < history_used) {
                 ch = history[line_index][x];
+                c = history_color[line_index][x];
             }
-            vga_put_at(x, y, ch);
+            vga_put_at(x, y, ch, c);
         }
     }
 }
@@ -54,7 +58,7 @@ static void render_history_line(size_t line_index) {
 
     size_t screen_y = line_index - viewport_top;
     for (size_t x = 0; x < VGA_WIDTH; ++x) {
-        vga_put_at(x, screen_y, history[line_index][x]);
+        vga_put_at(x, screen_y, history[line_index][x], history_color[line_index][x]);
     }
 }
 
@@ -82,6 +86,7 @@ static void ensure_new_line(void) {
     for (size_t y = 1; y < HISTORY_LINES; ++y) {
         for (size_t x = 0; x < VGA_WIDTH; ++x) {
             history[y - 1U][x] = history[y][x];
+            history_color[y - 1U][x] = history_color[y][x];
         }
     }
 
@@ -97,7 +102,6 @@ static void ensure_new_line(void) {
 
 void console_set_color(uint8_t fg, uint8_t bg) {
     color = (uint8_t)(fg | (bg << 4));
-    render();
 }
 
 void console_clear(void) {
@@ -132,9 +136,10 @@ void console_putc(char c) {
     }
 
     history[history_line][history_col] = c;
+    history_color[history_line][history_col] = color;
 
     if (viewport_top == bottom_viewport_top() && history_line >= viewport_top && history_line < viewport_top + VGA_HEIGHT) {
-        vga_put_at(history_col, history_line - viewport_top, c);
+        vga_put_at(history_col, history_line - viewport_top, c, color);
     } else {
         render_history_line(history_line);
     }
@@ -192,9 +197,10 @@ void console_backspace(void) {
 
     history_col--;
     history[history_line][history_col] = ' ';
+    history_color[history_line][history_col] = color;
 
     if (viewport_top == bottom_viewport_top() && history_line >= viewport_top && history_line < viewport_top + VGA_HEIGHT) {
-        vga_put_at(history_col, history_line - viewport_top, ' ');
+        vga_put_at(history_col, history_line - viewport_top, ' ', color);
     } else {
         render_history_line(history_line);
     }

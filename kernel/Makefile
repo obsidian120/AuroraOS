@@ -3,7 +3,7 @@ CC=gcc
 LD=ld
 CFLAGS=-m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -Wall -Wextra -Werror -Ikernel/src -Isrc
 LDFLAGS=-m elf_i386 -T linker.ld
-SRC=src/boot.s src/interrupt_stubs.s src/kernel.c src/console.c src/string.c src/keyboard.c src/shell.c src/ai_core.c src/memory.c src/task.c src/user.c src/editor.c src/cyralithfs.c src/storage.c src/network.c src/app.c src/extprog.c src/actionlog.c src/automation.c src/recovery.c src/paging.c src/process.c src/idt.c src/interrupts.c src/timer.c src/syscall.c src/arcade.c src/snake.c src/syslog.c src/panic.c
+SRC=src/boot.s src/interrupt_stubs.s src/kernel.c src/console.c src/string.c src/keyboard.c src/shell.c src/desktop.c src/x32fs_console.c src/cbdd.c src/ksettings.c src/ccs_settings.c src/ai_core.c src/memory.c src/task.c src/user.c src/editor.c src/cyralithfs.c src/storage.c src/network.c src/app.c src/extprog.c src/actionlog.c src/automation.c src/recovery.c src/paging.c src/process.c src/idt.c src/interrupts.c src/timer.c src/syscall.c src/arcade.c src/snake.c src/syslog.c src/panic.c
 OBJ=$(patsubst src/%.c,build/%.o,$(filter %.c,$(SRC))) $(patsubst src/%.s,build/%.o,$(filter %.s,$(SRC)))
 KERNEL=build/cyralith.kernel
 ISO=build/cyralith.iso
@@ -23,8 +23,9 @@ $(KERNEL): $(OBJ) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJ)
 
 iso: $(KERNEL)
-	mkdir -p iso/boot
+	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/cyralith.kernel
+	printf "set timeout=0\nset default=0\n\nmenuentry 'Cyralith' {\n    multiboot /boot/cyralith.kernel\n    boot\n}\n" > iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso
 
 run: iso

@@ -1,0 +1,108 @@
+Cyralith 2.7.1 current CCS review
+=================================
+
+Scope
+-----
+Declared scope: hobby / research OS running in QEMU/i386 with native shell, CyralithFS, basic users, desktop text mode, network stubs, recovery tools, and early driver headers.
+
+Verdict
+-------
+Conditionally CCS-aligned prototype, not CCS-approved yet.
+
+Current rough score
+-------------------
+Secure by default: 18 / 40
+Simple by default: 23 / 30
+Fast by default:   26 / 30
+Total:             67 / 100
+
+Hard-fail note:
+CCS v1.0 says Secure below 20/40 cannot be CCS-approved. Cyralith is close, but not over that line yet because app isolation, verified boot/update, and real system immutability are still architecture plans rather than enforced guarantees.
+
+What is already good
+--------------------
+1. Simple default model:
+   - one native shell
+   - one CyralithFS model
+   - one settings center for kernel/system settings
+   - desktop remains a UI layer, not a replacement for kernel settings
+
+2. Fast default model:
+   - no heavy desktop stack
+   - VGA text mode only for now
+   - low service count
+   - event-loop style kernel main loop
+
+3. Secure direction:
+   - normal user vs system mode exists
+   - privileged actions are guarded
+   - action log and syslog exist
+   - recovery/safemode pieces exist
+   - program manifests and approvals exist
+   - new sudo mode is visible and auditable
+
+What was added in this build
+----------------------------
+1. sudo-like workflow:
+   - sudo <password> <command>
+   - sudo <password> settings
+   - Settings screen: press U for sudo unlock
+   - sudo settings sessions auto-drop privileges when settings closes
+
+2. Kernel settings registry:
+   - kernel/src/ksettings.h
+   - kernel/src/ksettings.c
+   - persistent flags for kernel protection and CCS planning
+   - included in boot init, savefs, and loadfs
+
+3. Settings additions:
+   - settings kernel
+   - kernelconfig ccs
+   - Kernel protection options:
+     * safe defaults
+     * audit log
+     * recovery baseline
+     * update guard reservation
+     * system path protection
+     * sudo single-command policy
+   - CCS options:
+     * CCS baseline / consistent target / native target
+     * app isolation reservation
+     * minimal network exposure
+     * signed sources reservation
+     * rollback model reservation
+     * one primary package path
+
+CCS gap list
+------------
+Security gaps:
+- No real process memory isolation yet.
+- No signed update/package verification yet.
+- No verified boot.
+- No real per-application capability enforcement yet.
+- System state protection exists conceptually, but is not yet immutable.
+
+Simplicity gaps:
+- Shell has grown large; long-term split into modules is recommended.
+- Settings are better structured now, but should later be backed fully by a single kernel config registry.
+- Desktop settings must remain separate from kernel settings.
+
+Performance gaps:
+- Current system is lightweight.
+- Need measurable idle counters later.
+- Need bounded-driver and background-service metrics later.
+
+Recommended next CCS steps
+--------------------------
+1. Move more kernel settings out of shell.c into ksettings.c over time.
+2. Add a capability table per app/process.
+3. Add a simple read-only/system path policy in CyralithFS.
+4. Add a manifest signature placeholder for packages/programs.
+5. Add an CCS self-check command later, for example:
+   ccs status
+   ccs audit
+   ccs score
+
+Architecture note
+-----------------
+The future desktop x32 FS command line should remain a Desktop System Mode tool, not a normal shell expansion. It should use explicit elevated mode and a clear UI boundary, so the normal shell stays the kernel/admin console and the desktop remains the user-facing layer.

@@ -1,0 +1,25 @@
+Cyralith Basic Display Driver / CBDD
+===================================
+
+Diese Version fuegt eine erste Kernel-Schnittstelle fuer einen Basic Display Driver hinzu.
+
+Neue Dateien:
+- cyralith/kernel/src/cbdd.h
+- cyralith/kernel/src/cbdd.c
+
+Shell/Settings:
+- settings display
+- settings cbdd
+- display
+- cbdd
+
+Wichtig:
+CBDD zeichnet noch keinen echten Framebuffer. Es ist bewusst ein sauberer Kernel-Header +
+Treiberzustand fuer VGA-Textmodus und spaetere Framebuffer/Maus/Desktop-Arbeit.
+
+Architektur-Notiz:
+Shell-Settings bleiben Kernel-/System-Settings, aehnlich menuconfig. Desktop-eigene
+Einstellungen sollen spaeter separat in den Desktop wandern.
+
+Vorgemerkt fuer spaeter:
+Native x32 command line for the Cyralith file system im Desktop, getrennt von der Shell.

@@ -19,17 +19,17 @@ typedef struct {
 } app_snapshot_payload_t;
 
 static app_t g_apps[] = {
-    {{'l','u','m','e','n','\0'}, {'L','u','m','e','n','\0'}, {'N','a','n','o','-','a','r','t','i','g','e','r',' ','T','e','x','t','e','d','i','t','o','r','\0'}, 1U, 1U, 1U},
-    {{'f','i','l','e','s','\0'}, {'F','i','l','e','s','\0'}, {'E','i','n','f','a','c','h','e','r',' ','D','a','t','e','i','-','B','e','r','e','i','c','h','\0'}, 1U, 1U, 1U},
-    {{'s','e','t','t','i','n','g','s','\0'}, {'S','e','t','t','i','n','g','s','\0'}, {'S','p','r','a','c','h','e',',',' ','L','a','y','o','u','t',' ','u','n','d',' ','G','r','u','n','d','o','p','t','i','o','n','e','n','\0'}, 1U, 1U, 1U},
-    {{'n','e','t','w','o','r','k','\0'}, {'N','e','t','w','o','r','k','\0'}, {'N','e','t','z','w','e','r','k',',',' ','H','o','s','t','n','a','m','e',' ','u','n','d',' ','N','I','C','-','U','e','b','e','r','s','i','c','h','t','\0'}, 1U, 1U, 1U},
-    {{'m','o','n','i','t','o','r','\0'}, {'M','o','n','i','t','o','r','\0'}, {'S','y','s','t','e','m','-','U','e','b','e','r','b','l','i','c','k',' ','u','n','d',' ','S','t','a','t','u','s','\0'}, 1U, 1U, 1U},
-    {{'s','n','a','k','e','\0'}, {'S','n','a','k','e','\0'}, {'K','l','a','s','s','i','s','c','h','e','s',' ','S','n','a','k','e','-','S','p','i','e','l',' ','f','u','e','r',' ','d','i','e',' ','S','h','e','l','l','\0'}, 1U, 1U, 1U},
-    {{'b','r','o','w','s','e','r','\0'}, {'B','r','o','w','s','e','r','\0'}, {'G','e','p','l','a','n','t','e','r',' ','W','e','b','-','B','e','r','e','i','c','h',' ','a','l','s',' ','P','l','a','t','z','h','a','l','t','e','r','\0'}, 0U, 0U, 1U},
-    {{'d','e','s','k','t','o','p','\0'}, {'D','e','s','k','t','o','p','\0'}, {'E','i','n','f','a','c','h','e','r',' ','D','e','s','k','t','o','p',' ','f','u','e','r',' ','s','p','a','e','t','e','r','\0'}, 0U, 0U, 1U},
-    {{'p','a','i','n','t','\0'}, {'P','a','i','n','t','\0'}, {'K','l','e','i','n','e','r',' ','Z','e','i','c','h','e','n','-','P','l','a','t','z','h','a','l','t','e','r','\0'}, 0U, 0U, 1U},
+    {"lumen", "Lumen", "Nano-artiger Texteditor", 1U, 1U, 1U},
+    {"files", "Files", "Einfacher Datei-Bereich", 1U, 1U, 1U},
+    {"kernelconfig", "Kernelconfig", "Kernel/menuconfig-artige Systemoptionen", 1U, 1U, 1U},
+    {"x32fs", "x32 FS Console", "Native Command Line fuer CyralithFS", 1U, 1U, 1U},
+    {"network", "Network", "Netzwerk, Hostname und NIC-Uebersicht", 1U, 1U, 1U},
+    {"monitor", "Monitor", "System-Ueberblick und Status", 1U, 1U, 1U},
+    {"snake", "Snake", "Klassisches Snake-Spiel fuer die Shell", 1U, 1U, 1U},
+    {"browser", "Browser", "Geplanter Web-Bereich als Platzhalter", 0U, 0U, 1U},
+    {"desktop", "Desktop", "Einfacher Desktop fuer spaeter", 0U, 0U, 1U},
+    {"paint", "Paint", "Kleiner Zeichen-Platzhalter", 0U, 0U, 1U},
 };
-
 static unsigned char persist_buffer[APP_PERSIST_SECTORS * STORAGE_SECTOR_SIZE];
 
 static void zero_bytes(unsigned char* dst, size_t count) {

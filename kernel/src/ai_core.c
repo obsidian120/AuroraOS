@@ -69,9 +69,9 @@ static int try_safe_nl_command(const char* input) {
         g_runner("status");
         return 1;
     }
-    if ((kcontains_ci(input, "open") != 0 || kcontains_ci(input, "oeffne") != 0) && kcontains_ci(input, "settings") != 0) {
-        console_writeln("[ai] Verstanden: Ich oeffne 'settings'.");
-        g_runner("settings");
+    if ((kcontains_ci(input, "open") != 0 || kcontains_ci(input, "oeffne") != 0) && kcontains_ci(input, "kernelconfig") != 0) {
+        console_writeln("[ai] Verstanden: Ich oeffne 'kernelconfig'.");
+        g_runner("kernelconfig");
         return 1;
     }
     if ((kcontains_ci(input, "show") != 0 || kcontains_ci(input, "zeige") != 0) && kcontains_ci(input, "network") != 0) {
@@ -102,7 +102,7 @@ void ai_route(const char* input) {
     static const char* help_words[] = {"hilfe", "help", "how", "was kann", "what can"};
     static const char* task_words[] = {"task", "dienst", "service", "laeuft", "running"};
     static const char* memory_words[] = {"speicher", "memory", "heap", "ram", "free"};
-    static const char* layout_words[] = {"settings", "einstellung", "sprache", "language", "tastatur", "keyboard", "keymap", "hostname", "dhcp", "gateway"};
+    static const char* layout_words[] = {"kernelconfig", "einstellung", "sprache", "language", "tastatur", "keyboard", "keymap", "hostname", "dhcp", "gateway"};
     static const char* user_words[] = {"benutzer", "user", "login", "whoami", "elevate", "rechte"};
     static const char* editor_words[] = {"editor", "notiz", "text", "lumen", "nano"};
     static const char* fs_words[] = {"dateisystem", "filesystem", "ordner", "datei", "file", "folder"};
@@ -111,7 +111,7 @@ void ai_route(const char* input) {
     static const char* reboot_words[] = {"reboot", "neustart", "restart"};
     static const char* interrupt_words[] = {"ctrl", "abbrechen", "interrupt", "cancel"};
     static const char* lang_de_words[] = {"deutsch", "german", "deutsch einstellen"};
-    static const char* lang_en_words[] = {"englisch", "english", "english settings"};
+    static const char* lang_en_words[] = {"englisch", "english", "english kernelconfig"};
     static const char* banner_words[] = {"banner", "welcome", "willkommen"};
     static const char* version_words[] = {"version", "build"};
     static const char* about_words[] = {"cyralith", "about", "ueber", "uber"};
@@ -207,7 +207,7 @@ void ai_route(const char* input) {
         case 4:
             console_write("[ai] Aktuelles Layout: ");
             console_writeln(keyboard_layout_name());
-            console_writeln("[ai] Tipp: Nutze 'settings' oder 'app run settings'.");
+            console_writeln("[ai] Tipp: Nutze 'kernelconfig' oder 'app run kernelconfig'.");
             return;
         case 5: {
             const user_t* current = user_current();
@@ -246,10 +246,10 @@ void ai_route(const char* input) {
             console_writeln("[ai] Tipp: Ctrl+C bricht die aktuelle Eingabe ab.");
             return;
         case 12:
-            console_writeln("[ai] Tipp: Nutze 'settings' und waehle dort Sprache.");
+            console_writeln("[ai] Tipp: Nutze 'kernelconfig' und waehle dort Sprache.");
             return;
         case 13:
-            console_writeln("[ai] Tipp: Use 'settings' and choose language there.");
+            console_writeln("[ai] Tipp: Use 'kernelconfig' and choose language there.");
             return;
         case 14:
             console_writeln("[ai] Tipp: Nutze 'welcome'.");
@@ -266,7 +266,7 @@ void ai_route(const char* input) {
             console_write(network_hostname());
             console_write(" / ");
             console_writeln(network_ip());
-            console_writeln("[ai] Tipp: Nutze 'settings' fuer Werte und 'network'/'nic' fuer Status.");
+            console_writeln("[ai] Tipp: Nutze 'kernelconfig' fuer Werte und 'network'/'nic' fuer Status.");
             return;
         case 18:
             if (network_nic_count() == 0U) {
@@ -319,7 +319,7 @@ void ai_route(const char* input) {
             console_writeln("[ai] Fuer Selbsthilfe helfen 'doctor' und 'recover'.");
             return;
         default:
-            console_writeln("[ai] Ich bin noch lokal und regelbasiert. Versuch es mit 'help', 'status', 'network' oder 'settings'.");
+            console_writeln("[ai] Ich bin noch lokal und regelbasiert. Versuch es mit 'help', 'status', 'network' oder 'kernelconfig'.");
             return;
     }
 }

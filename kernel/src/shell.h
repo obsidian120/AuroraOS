@@ -5,5 +5,6 @@ void shell_init(void);
 void shell_handle_key(int key);
 void shell_poll(void);
 void shell_show_welcome(void);
+void shell_run_command(const char* cmd);
 
 #endif

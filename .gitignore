@@ -7,4 +7,13 @@ __pycache__/
 # Kernel build artifacts
 kernel/build/
 kernel/iso/boot/cyralith.kernel
+kernel/iso/boot/grub/grub.cfg
 *.iso
+*.o
+*.elf
+*.kernel
+
+# Editor / OS files
+.DS_Store
+.vscode/
+.idea/

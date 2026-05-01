@@ -17,6 +17,8 @@
 #include "process.h"
 #include "arcade.h"
 #include "syslog.h"
+#include "cbdd.h"
+#include "ksettings.h"
 
 static void show_boot_banner(void) {
     console_writeln("============================================================");
@@ -44,6 +46,10 @@ void kernel_main(void) {
     if (recovery_safe_mode_enabled() != 0) {
         syslog_write(SYSLOG_WARN, "recovery", "safe mode enabled");
     }
+    boot_step("Basic display driver");
+    cbdd_init();
+    boot_step("Kernel settings registry");
+    ksettings_init();
     boot_step("Memory");
     kmem_init();
     boot_step("Tasks");
