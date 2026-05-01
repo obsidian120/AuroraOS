@@ -80,21 +80,21 @@ async function loadLatestRelease() {
       primaryDownload.textContent = `${primaryAsset.name} herunterladen`;
       downloadHint.textContent = `Direkter Download aus der neuesten GitHub Release.`;
     } else {
+      const sourceLink = document.createElement("a");
+      sourceLink.className = "asset-link";
+      sourceLink.href = sourceZipUrl;
+      sourceLink.textContent = "Quellcode als ZIP herunterladen";
+      assetList.appendChild(sourceLink);
+
       const releaseLink = document.createElement("a");
       releaseLink.className = "asset-link";
       releaseLink.href = release.html_url || latestReleaseUrl;
       releaseLink.textContent = "Release-Seite öffnen";
       assetList.appendChild(releaseLink);
 
-      const sourceLink = document.createElement("a");
-      sourceLink.className = "asset-link";
-      sourceLink.href = sourceZipUrl;
-      sourceLink.textContent = "Quellcode als ZIP";
-      assetList.appendChild(sourceLink);
-
-      primaryDownload.href = release.html_url || latestReleaseUrl;
-      primaryDownload.textContent = "Neueste Release öffnen";
-      downloadHint.textContent = "Diese Release enthält keine erkannten Binärdateien. Öffne die Release-Seite oder lade den Quellcode.";
+      primaryDownload.href = sourceZipUrl;
+      primaryDownload.textContent = "Quellcode als ZIP herunterladen";
+      downloadHint.textContent = "In dieser GitHub Release wurden keine eigenen Download-Dateien hochgeladen. Deshalb nutzt die Seite den Quellcode-ZIP als Fallback.";
     }
   } catch (error) {
     releaseName.textContent = "Release konnte nicht automatisch geladen werden";
@@ -126,4 +126,3 @@ async function loadLatestRelease() {
 }
 
 loadLatestRelease();
-
