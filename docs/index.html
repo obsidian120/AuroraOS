@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cyralith OS herunterladen</title>
+  <meta name="description" content="Download-Seite für Cyralith OS: ein experimentelles, unabhängiges Hobby-Betriebssystem." />
+  <meta property="og:title" content="Cyralith OS herunterladen" />
+  <meta property="og:description" content="AI-first Betriebssystem mit modularer Architektur, CyralithFS und Lumen-Editor." />
+  <meta property="og:type" content="website" />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-glow"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Cyralith Startseite">
+      <span class="brand-mark">C</span>
+      <span>Cyralith</span>
+    </a>
+
+    <nav class="nav">
+      <a href="#download">Download</a>
+      <a href="#features">Features</a>
+      <a href="https://github.com/obsidian120/Cyralith" rel="noreferrer">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero section">
+      <div class="hero-copy">
+        <p class="eyebrow">Experimental OS • AI-first • Hobby-Projekt</p>
+        <h1>Cyralith OS herunterladen</h1>
+        <p class="lead">
+          Ein unabhängiges Betriebssystem mit einfacher Bedienung, modularer Architektur,
+          CyralithFS, Lumen-Editor und sicherem Programm-Modell.
+        </p>
+
+        <div class="hero-actions">
+          <a id="primaryDownload" class="button button-primary" href="https://github.com/obsidian120/Cyralith/releases/latest">
+            Neueste Version laden
+          </a>
+          <a class="button button-secondary" href="https://github.com/obsidian120/Cyralith/releases">
+            Alle Releases ansehen
+          </a>
+        </div>
+
+        <p id="downloadHint" class="hint">
+          Die neueste Release wird automatisch von GitHub geladen.
+        </p>
+      </div>
+
+      <aside class="terminal-card" aria-label="Cyralith Terminal Vorschau">
+        <div class="terminal-top">
+          <span></span><span></span><span></span>
+        </div>
+        <pre><code>cyralith&gt; help
+cyralith&gt; sysdo cyralith kernelconfig
+cyralith&gt; open desktop
+cyralith&gt; x32fs
+cyralith&gt; status</code></pre>
+      </aside>
+    </section>
+
+    <section id="download" class="section">
+      <div class="section-heading">
+        <p class="eyebrow">Download</p>
+        <h2>Aktuelle Version</h2>
+        <p>Die Seite fragt GitHub Releases ab und zeigt verfügbare Dateien automatisch an.</p>
+      </div>
+
+      <div class="download-grid">
+        <article class="card release-card">
+          <div>
+            <p class="card-label">Latest Release</p>
+            <h3 id="releaseName">Wird geladen …</h3>
+            <p id="releaseMeta" class="muted">Verbindung zu GitHub Releases wird aufgebaut.</p>
+          </div>
+
+          <div id="assetList" class="asset-list" aria-live="polite">
+            <a class="asset-link" href="https://github.com/obsidian120/Cyralith/releases/latest">
+              Release-Seite öffnen
+            </a>
+          </div>
+        </article>
+
+        <article class="card warning-card">
+          <p class="card-label">Hinweis</p>
+          <h3>Frühe Entwicklung</h3>
+          <p>
+            Cyralith ist ein experimentelles OS. Nutze es zuerst in einer VM wie QEMU,
+            VirtualBox oder VMware und nicht auf produktiver Hardware.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="section-heading">
+        <p class="eyebrow">Was steckt drin?</p>
+        <h2>Kernfunktionen</h2>
+      </div>
+
+      <div class="feature-grid">
+        <article class="card">
+          <h3>Custom x86 Kernel</h3>
+          <p>Eigener Kernel mit GRUB-Multiboot-Bootflow und ISO-Build-Ziel.</p>
+        </article>
+        <article class="card">
+          <h3>CyralithFS</h3>
+          <p>RAM-Dateisystem mit Persistenz-Hooks und eigener x32fs-Konsole.</p>
+        </article>
+        <article class="card">
+          <h3>Lumen & Shell</h3>
+          <p>Textbasierte Oberfläche, Editor-Ideen und mehrsprachige Shell-Bedienung.</p>
+        </article>
+        <article class="card">
+          <h3>Sysdo-Sicherheit</h3>
+          <p>Geschützter Systemrechte-Flow für sensible Systemfunktionen.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-heading">
+        <p class="eyebrow">Für Entwickler</p>
+        <h2>Aus dem Quellcode bauen</h2>
+      </div>
+
+      <div class="code-card">
+        <pre><code>git clone https://github.com/obsidian120/Cyralith.git
+cd Cyralith/kernel
+make clean
+make all
+
+# ISO bauen und in QEMU starten:
+make iso
+make run</code></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>© Cyralith / Obsidian. Website für GitHub Pages.</p>
+    <div>
+      <a href="https://github.com/obsidian120/Cyralith">Repository</a>
+      <a href="https://github.com/obsidian120/Cyralith/issues">Issues</a>
+      <a href="https://github.com/obsidian120/Cyralith/releases">Releases</a>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
