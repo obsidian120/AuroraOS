@@ -126,3 +126,4 @@ async function loadLatestRelease() {
 }
 
 loadLatestRelease();
+
