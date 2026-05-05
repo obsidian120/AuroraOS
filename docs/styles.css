@@ -392,3 +392,12 @@ code {
     flex-wrap: wrap;
   }
 }
+#impressum {
+  scroll-margin-top: 110px;
+}
+
+#impressum a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
